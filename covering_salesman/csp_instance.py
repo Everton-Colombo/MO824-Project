@@ -1,0 +1,2 @@
+class CpsInstance:
+    pass

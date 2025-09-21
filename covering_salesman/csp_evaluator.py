@@ -1,0 +1,2 @@
+class CspEvaluator:
+    pass
