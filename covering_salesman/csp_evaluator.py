@@ -9,7 +9,8 @@ class CspEvaluator:
         self.instance = instance
     
     def evaluate_objfun(self, solution: CspSolution) -> float:
-        self._calculate_travelled_distance(solution)
+        if solution.travelled_distance is None:
+            self._calculate_travelled_distance(solution)
         
         return solution.travelled_distance
     
@@ -48,42 +49,36 @@ class CspEvaluator:
 
         return solution.travelled_distance - new_distance
 
-    def evaluate_edge_insertion_delta(self, solution: CspSolution, inserted_node: tuple, position: int) -> float:
-        # Item b) Insertion Method
+    def evaluate_edge_insertion_delta(self, solution: CspSolution, node: tuple, position: int) -> float:
+        """
+        Item b) Insertion Method.
+        Takes a node that is already in the path and evaluates the cost of removing it from its current position
+        and inserting it at the specified position.
+        """
         
         if position < 0 or position > len(solution.path):
             raise ValueError("Position is out of bounds.")
         
-        original_index = solution.path.index(inserted_node)
-        prev_u = solution.path[original_index - 1] if original_index > 0 else None
-        prev_v = solution.path[original_index + 1] if original_index < len(solution.path) - 1 else None
-
+        original_index = solution.path.index(node) # This will raise ValueError if not found
+        
+        if original_index == position or original_index == position - 1:
+            return 0.0
+        
+        # Get the previous and next nodes (before removal)
+        prev_lneighbor = solution.path[original_index - 1] if original_index > 0 else None
+        prev_rneighbot = solution.path[original_index + 1] if original_index < len(solution.path) - 1 else None
+        # Get the previous and next nodes (after insertion)
+        new_lneighbor = solution.path[position] if position < len(solution.path) else None
+        new_rneighbor = solution.path[position + 1] if position + 1 < len(solution.path) else None
+        
         new_distance = solution.travelled_distance
-        new_distance -= self._distance(prev_u, inserted_node)
-        new_distance -= self._distance(inserted_node, prev_v)
-        new_distance += self._distance(prev_u, prev_v)
-            
-        if position > 0 and position < len(solution.path):
-            # Inserting in the middle
-            
-            u = solution.path[position - 1]
-            v = solution.path[position]
-            
-            new_distance -= self._distance(u, v)
-            new_distance += self._distance(u, inserted_node)
-            new_distance += self._distance(inserted_node, v)
-            
-        elif position == 0:
-            # Inserting at the start
-            v = solution.path[0]
-            new_distance = solution.travelled_distance
-            
-            new_distance += self._distance(inserted_node, v)
-            
-        else:  # position == len(solution.path)
-            # Inserting at the end
-            u = solution.path[-1]
-            new_distance = solution.travelled_distance
-            new_distance += self._distance(u, inserted_node)
+        # Remove the node from its original position    
+        new_distance -= self._distance(prev_lneighbor, node)
+        new_distance -= self._distance(node, prev_rneighbot)
+        new_distance += self._distance(prev_lneighbor, prev_rneighbot)
+        # Insert the node at the new position
+        new_distance -= self._distance(new_lneighbor, new_rneighbor)
+        new_distance += self._distance(prev_lneighbor, node)
+        new_distance += self._distance(node, new_rneighbor)
 
         return new_distance - solution.travelled_distance
