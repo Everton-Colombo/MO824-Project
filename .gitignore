@@ -1,0 +1,38 @@
+# Arquivo .gitignore para projetos Python
+
+# Pastas de cache do Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ambientes Virtuais
+venv/
+.venv/
+env/
+.env/
+venv.bak/
+env.bak/
+
+# Arquivos de IDEs e Editores
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Arquivos de Sistema Operacional
+.DS_Store
+Thumbs.db
+
+# Logs e bancos de dados temporários
+*.log
+*.sqlite3
+
+# Arquivos de build e distribuição
+build/
+dist/
+*.egg-info/
+
+# Arquivos de teste
+.pytest_cache/
+.coverage
