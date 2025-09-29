@@ -82,3 +82,52 @@ class CspEvaluator:
         new_distance += self._distance(node, new_rneighbor)
 
         return new_distance - solution.travelled_distance
+    
+    def evaluate_swap_delta(self, solution: CspSolution, node1: tuple, node2: tuple) -> float:
+        """
+        Item c) Swapping Method.
+        Takes two nodes that are already in the path and evaluates the cost of swapping their positions.
+        """
+        
+        if node1 not in solution.path or node2 not in solution.path:
+            raise ValueError("Both nodes must be in the solution path.")
+        
+        if node1 == node2:
+            return 0.0
+        
+        idx1, idx2 = solution.path.index(node1), solution.path.index(node2)
+        
+        if abs(idx1 - idx2) == 1:
+            # Adjacent nodes
+            lneighbor = solution.path[min(idx1, idx2) - 1] if min(idx1, idx2) > 0 else None
+            rneighbor = solution.path[max(idx1, idx2) + 1] if max(idx1, idx2) < len(solution.path) - 1 else None
+            
+            new_distance = solution.travelled_distance
+            new_distance -= self._distance(lneighbor, node1)
+            new_distance -= self._distance(node1, node2)
+            new_distance -= self._distance(node2, rneighbor)
+            new_distance += self._distance(lneighbor, node2)
+            new_distance += self._distance(node2, node1)
+            new_distance += self._distance(node1, rneighbor)
+            
+            return new_distance - solution.travelled_distance
+        else:
+            # Non-adjacent nodes
+            lneighbor1 = solution.path[idx1 - 1] if idx1 > 0 else None
+            rneighbor1 = solution.path[idx1 + 1] if idx1 < len(solution.path) - 1 else None
+            lneighbor2 = solution.path[idx2 - 1] if idx2 > 0 else None
+            rneighbor2 = solution.path[idx2 + 1] if idx2 < len(solution.path) - 1 else None
+            
+            new_distance = solution.travelled_distance
+            # Remove edges connected to node1 and node2
+            new_distance -= self._distance(lneighbor1, node1)
+            new_distance -= self._distance(node1, rneighbor1)
+            new_distance -= self._distance(lneighbor2, node2)
+            new_distance -= self._distance(node2, rneighbor2)
+            # Add edges for swapped positions
+            new_distance += self._distance(lneighbor1, node2)
+            new_distance += self._distance(node2, rneighbor1)
+            new_distance += self._distance(lneighbor2, node1)
+            new_distance += self._distance(node1, rneighbor2)
+            
+            return new_distance - solution.travelled_distance
