@@ -46,4 +46,4 @@ class CspInstance:
     def _build_graph(self, node_positions: list[tuple[float, float]]) -> nx.Graph:
         g = nx.Graph()
         g.add_nodes_from(range(self.num_nodes))
-        return g
+        return g    
