@@ -23,11 +23,12 @@ class AgcspEvaluator:
             solution.travelled_distance += self.instance._distances[u][v]
 
     #### Coverage evaluation methods:
-    def calculate_coverage_proportion(self, path_points):
+    def calculate_coverage_proportion(self, solution: AgcspSolution) -> tuple[float, float]:
         """
         Efficiently calculates the proportion of covered nodes.
+        Returns a tuple (coverage_proportion, num_covered_nodes).
         """
-        path_arr = np.array(path_points)
+        path_arr = np.array(solution.path)
         shifted_path = path_arr - self.instance.min_coords
 
         rectangular_coverage = self._get_rectangular_coverage(
@@ -37,7 +38,10 @@ class AgcspEvaluator:
         )
 
         final_coverage_mask = rectangular_coverage & self.instance.validity_mask
+        solution._hits_obstacle = np.any(final_coverage_mask & self.instance.obstacle_mask)
+        
         num_covered_nodes = np.sum(final_coverage_mask)
+        
 
         return num_covered_nodes / self.instance.node_count
     
