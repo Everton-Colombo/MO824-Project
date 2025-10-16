@@ -33,21 +33,4 @@ class AgcspInstance:
         self.obstacle_mask = np.zeros(self.bounding_box_shape, dtype=bool)
         shifted_obstacles = self.obstacle_nodes - self.min_coords
         self.obstacle_mask[shifted_obstacles[:, 0], shifted_obstacles[:, 1]] = True
-
-        # Node distances matrix:
-        # self._distances = self._calculate_distances()
-
-    def _calculate_distances(self) -> List[List[float]]:
-        distances = [[0.0 for _ in self.grid_nodes] for _ in self.grid_nodes]
-        for i, (x1, y1) in enumerate(self.grid_nodes):
-            for j, (x2, y2) in enumerate(self.grid_nodes):
-                distances[i][j] = ((x1 - x2) ** 2 + (y1 - y2) ** 2) ** 0.5
-        return distances
-
-class AgcspSolution:
-    def __init__(self, path: List[int]):
-        self.path = path
-        self.travelled_distance: float = None  # To be calculated
-
-    def __repr__(self):
-        return f"AgcspSolution(path={self.path}, travelled_distance={self.travelled_distance})"
+        

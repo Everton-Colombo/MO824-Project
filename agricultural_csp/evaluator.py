@@ -2,52 +2,96 @@ from scipy.ndimage import distance_transform_edt
 from skimage.draw import line
 import numpy as np
 
-from inst_sol import *
-
+from instance import *
+from solution import *
 
 class AgcspEvaluator:
     
     def __init__(self, instance: AgcspInstance):
         self.instance = instance
     
+    #region Objective function (and its components) evaluation methods:
     def evaluate_objfun(self, solution: AgcspSolution) -> float:
-        if solution.travelled_distance is None:
-            self._calculate_travelled_distance(solution)
+        alpha, beta, gamma = 1.0, 1.0, 1.0 # Weights for the three components
         
-        return solution.travelled_distance
+        coverage_proportion = self.calculate_coverage_proportion(solution)
+        travelled_distance = self._get_travelled_distance(solution)
+        manouver_complexity_penalty = self._calculate_manouver_complexity_penalty(solution)
+        
+        return (alpha * (1 - coverage_proportion) +
+                beta * travelled_distance +
+                gamma * manouver_complexity_penalty)
     
     def _calculate_travelled_distance(self, solution: AgcspSolution):
         solution.travelled_distance = 0.0
         for i in range(len(solution.path) - 1):
             u, v = solution.path[i], solution.path[i + 1]
-            solution.travelled_distance += self.instance._distances[u][v]
+            solution.travelled_distance += np.linalg.norm(np.array(u) - np.array(v))    # TODO: Address conversion overhead
+    
+    def _calculate_manouver_complexity_penalty(self, solution: AgcspSolution) -> float:
+        """
+        Calculates the maneuver complexity penalty based on the angles between consecutive path segments.
+        The penalty is higher for sharper turns (larger angles).
+        
+        Formula: P_M(S) = sum(1 + cos(theta_i)) for i from 2 to k-1
+        where theta_i is the angle at point i between segments (i-1, i) and (i, i+1)
+        """
+        if len(solution.path) < 3:
+            return 0.0
+        
+        penalty = 0.0
+        
+        for i in range(1, len(solution.path) - 1):
+            p_prev = np.array(solution.path[i - 1])
+            p_curr = np.array(solution.path[i])
+            p_next = np.array(solution.path[i + 1])
+            
+            # Calculate vectors
+            v1 = p_curr - p_prev
+            v2 = p_next - p_curr
+            
+            # Calculate norms
+            norm_v1 = np.linalg.norm(v1)
+            norm_v2 = np.linalg.norm(v2)
+            
+            # Avoid division by zero (shouldn't happen with valid paths, but just in case)
+            if norm_v1 > 0 and norm_v2 > 0:
+                cos_theta = np.dot(v1, v2) / (norm_v1 * norm_v2)
+                penalty += 1 - cos_theta
+        
+        return penalty
 
-    #### Coverage evaluation methods:
-    def calculate_coverage_proportion(self, solution: AgcspSolution) -> tuple[float, float]:
+    #region Coverage evaluation methods:
+    def calculate_coverage_proportion(self, solution: AgcspSolution) -> float:
         """
         Efficiently calculates the proportion of covered nodes.
-        Returns a tuple (coverage_proportion, num_covered_nodes).
+        Also sets a flag in the solution if any obstacle is hit.
         """
-        path_arr = np.array(solution.path)
-        shifted_path = path_arr - self.instance.min_coords
 
-        rectangular_coverage = self._get_rectangular_coverage(
-            self.instance.bounding_box_shape,
-            shifted_path,
-            self.instance.sprayer_length
-        )
-
-        final_coverage_mask = rectangular_coverage & self.instance.validity_mask
+        final_coverage_mask = self._get_coverage_mask(solution.path)
         solution._hits_obstacle = np.any(final_coverage_mask & self.instance.obstacle_mask)
         
         num_covered_nodes = np.sum(final_coverage_mask)
-        
-
         return num_covered_nodes / self.instance.node_count
     
     def get_covered_nodes_list(self, path_points: List[Node]) -> np.ndarray:
         """
         Calculates the covered nodes for a given path.
+        This is method is more for visualization/debugging purposes, as it returns the actual list of covered nodes.
+        For the optimization process, use calculate_coverage_proportion instead.
+        """
+
+        final_coverage_mask = self._get_coverage_mask(path_points)
+
+        # Convert covered indices back to the original coordinate system
+        covered_indices_shifted = np.argwhere(final_coverage_mask)
+        covered_nodes = covered_indices_shifted + self.instance.min_coords
+
+        return covered_nodes
+
+    def _get_coverage_mask(self, path_points: List[Node]) -> np.ndarray:
+        """
+        Calculates the coverage mask for a given path.
         This is done using a distance transform approach, which requires a rectangular grid.
         """
         path_arr = np.array(path_points)
@@ -60,12 +104,7 @@ class AgcspEvaluator:
         )
 
         final_coverage_mask = rectangular_coverage & self.instance.validity_mask
-
-        # Convert covered indices back to the original coordinate system
-        covered_indices_shifted = np.argwhere(final_coverage_mask)
-        covered_nodes = covered_indices_shifted + self.instance.min_coords
-
-        return covered_nodes
+        return final_coverage_mask
     
     @staticmethod
     def _get_rectangular_coverage(grid_shape, path_points, sprayer_length):
@@ -82,9 +121,11 @@ class AgcspEvaluator:
         
         distances = distance_transform_edt(~path_grid)
         return distances <= (sprayer_length / 2.0)
+    #endregion
+    
+    #endregion
 
-
-    #### Neighborhood evaluation methods:
+    #region Neighborhood steps evaluation methods:
     
     def evaluate_removal_delta(self, solution: AgcspSolution, node: int) -> float:
         # Item a) Removal Method
@@ -152,3 +193,4 @@ class AgcspEvaluator:
         for node in solution.path:
             covered.update(self.instance.coverage.get(node, {node}))
         return len(covered) == len(self.instance.grid_nodes)
+    #endregion
