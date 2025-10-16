@@ -20,7 +20,7 @@ class AgcspSolution:
             return self._cache
 
     def __repr__(self):
-        return f"AgcspSolution(path={self.path}, travelled_distance={self.travelled_distance})"
+        return f"AgcspSolution(path={self.path}, cache_keys={list(self.cache.keys())})"
 
 def cache_on_solution(func):
     """Decorator to cache function results on AgcspSolution's internal cache."""

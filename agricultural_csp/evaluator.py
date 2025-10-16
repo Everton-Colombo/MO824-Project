@@ -9,19 +9,20 @@ class AgcspEvaluator:
     
     def __init__(self, instance: AgcspInstance):
         self.instance = instance
+        self.alpha = 1.0  # Weight for coverage proportion
+        self.beta = 1.0   # Weight for travelled distance
+        self.gamma = 1.0  # Weight for maneuver complexity penalty
     
     #region Objective function (and its components) evaluation methods:
     @cache_on_solution
     def objfun(self, solution: AgcspSolution) -> float:
-        alpha, beta, gamma = 1.0, 1.0, 1.0 # Weights for the three components
-        
         coverage_proportion = self.coverage_proportion(solution)
         travelled_distance = self.path_length(solution)
         manouver_complexity_penalty = self.manouver_complexity_penalty(solution)
         
-        objfun =  (alpha * (1 - coverage_proportion) +
-                    beta * travelled_distance +
-                    gamma * manouver_complexity_penalty)
+        objfun =  (self.alpha * (1 - coverage_proportion) +
+                   self.beta * travelled_distance +
+                   self.gamma * manouver_complexity_penalty)
         return objfun
 
     @cache_on_solution
@@ -131,30 +132,58 @@ class AgcspEvaluator:
 
     #region Neighborhood steps evaluation methods:
     
-    def evaluate_removal_delta(self, solution: AgcspSolution, node: int) -> float:
-        # Item a) Removal Method
-        if node not in solution.path:
-            raise ValueError("Node to be removed is not in the solution path.")
-        
-        idx = solution.path.index(node)
-        
-        if idx == 0 or idx == len(solution.path) - 1:
-            # If it's the first or last node, just remove it
-            if idx == 0:
-                # First node
-                new_distance = solution.travelled_distance - self.instance._distances[node][solution.path[1]]
-            else:
-                # Last node
-                new_distance = solution.travelled_distance - self.instance._distances[solution.path[-2]][node]
-        else:
-            # Remove the node and add the distance between its neighbors
-            new_distance = solution.travelled_distance
-            new_distance -= self.instance._distances[solution.path[idx - 1]][node]
-            new_distance -= self.instance._distances[node][solution.path[idx + 1]]
-            new_distance += self.instance._distances[solution.path[idx - 1]][solution.path[idx + 1]]
 
-        return solution.travelled_distance - new_distance
-    
+
+    def evaluate_removal_delta(self, solution: AgcspSolution, node_idx: int) -> float:
+        # Item a) Removal Method
+        if node_idx < 0 or node_idx >= len(solution.path):
+            raise ValueError("Node index is out of bounds.")
+
+        old_distance = solution.cache.get('path_length')
+        old_coverage = solution.cache.get('coverage_proportion')
+        old_mcp = solution.cache.get('manouver_complexity_penalty')
+
+        new_distance, new_coverage, new_mcp = None, None, None
+
+        if old_distance is None or old_coverage is None or old_mcp is None:
+            raise ValueError("Solution must have been evaluated before calling this method.")
+        
+        node = solution.path[node_idx]
+        prev_node = solution.path[node_idx - 1] if node_idx > 0 else None
+        next_node = solution.path[node_idx + 1] if node_idx < len(solution.path) - 1 else None
+
+        # Calculate new distance
+        
+        if prev_node is None and next_node is None:
+            new_distance = 0.0
+            new_coverage = 0.0
+            new_mcp = 0.0
+        elif prev_node is None:
+            new_distance = old_distance - np.linalg.norm(node - next_node)
+            new_coverage = self.coverage_proportion(AgcspSolution(solution.path[1:]))
+            new_mcp = old_mcp - (1 - np.dot((next_node - node) / np.linalg.norm(next_node - node), (solution.path[2] - next_node) / np.linalg.norm(solution.path[2] - next_node))) if len(solution.path) > 2 else 0.0
+        elif next_node is None:
+            new_distance = old_distance - np.linalg.norm(prev_node - node)
+            new_coverage = self.coverage_proportion(AgcspSolution(solution.path[:-1]))
+            new_mcp = old_mcp - (1 - np.dot((node - prev_node) / np.linalg.norm(node - prev_node), (prev_node - solution.path[-3]) / np.linalg.norm(prev_node - solution.path[-3]))) if len(solution.path) > 2 else 0.0
+        else:
+            new_distance = (old_distance 
+                            - np.linalg.norm(prev_node - node) 
+                            - np.linalg.norm(node - next_node) 
+                            + np.linalg.norm(prev_node - next_node))
+            new_coverage = self.coverage_proportion(AgcspSolution(solution.path[:node_idx] + solution.path[node_idx+1:]))
+            if len(solution.path) > 2:
+                old_angle_penalty = (1 - np.dot((node - prev_node) / np.linalg.norm(node - prev_node), 
+                                               (next_node - node) / np.linalg.norm(next_node - node)))
+                new_angle_penalty = (1 - np.dot((next_node - prev_node) / np.linalg.norm(next_node - prev_node), 
+                                               (solution.path[node_idx + 2] - next_node) / np.linalg.norm(solution.path[node_idx + 2] - next_node))) if node_idx + 2 < len(solution.path) else 0.0
+                new_mcp = old_mcp - old_angle_penalty + new_angle_penalty
+            else:
+                new_mcp = 0.0
+
+        new_objfun = self.alpha * new_distance + self.beta * new_coverage + self.gamma * new_mcp
+        return new_objfun - solution.cache.get('objfun')
+
     def evaluate_edge_insertion_delta(self, solution: AgcspSolution, node: int, position: int) -> float:
         """
         Item b) Insertion Method.
@@ -191,10 +220,4 @@ class AgcspEvaluator:
                               self.instance._distances[solution.path[position - 1]][solution.path[position]])
         
         return removal_cost + insertion_cost
-
-    def is_feasible(self, solution: AgcspSolution) -> bool:
-        covered = set()
-        for node in solution.path:
-            covered.update(self.instance.coverage.get(node, {node}))
-        return len(covered) == len(self.instance.grid_nodes)
     #endregion

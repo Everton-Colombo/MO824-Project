@@ -14,7 +14,10 @@ class AgcspInstance:
                 raise ValueError(f"Obstacle node {obs} is not in grid nodes.")
         self.obstacle_nodes = np.array(obstacle_nodes)
 
+        self.distance_cache = {}
+        
         self._perform_precomputations()
+
 
     def _perform_precomputations(self):
         self.node_count = len(self.grid_nodes)
