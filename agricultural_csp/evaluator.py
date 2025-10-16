@@ -11,23 +11,29 @@ class AgcspEvaluator:
         self.instance = instance
     
     #region Objective function (and its components) evaluation methods:
+    @cache_on_solution
     def evaluate_objfun(self, solution: AgcspSolution) -> float:
         alpha, beta, gamma = 1.0, 1.0, 1.0 # Weights for the three components
         
         coverage_proportion = self.calculate_coverage_proportion(solution)
-        travelled_distance = self._get_travelled_distance(solution)
+        travelled_distance = self._calculate_travelled_distance(solution)
         manouver_complexity_penalty = self._calculate_manouver_complexity_penalty(solution)
         
-        return (alpha * (1 - coverage_proportion) +
-                beta * travelled_distance +
-                gamma * manouver_complexity_penalty)
-    
-    def _calculate_travelled_distance(self, solution: AgcspSolution):
-        solution.travelled_distance = 0.0
+        objfun =  (alpha * (1 - coverage_proportion) +
+                    beta * travelled_distance +
+                    gamma * manouver_complexity_penalty)
+        return objfun
+
+    @cache_on_solution
+    def _calculate_travelled_distance(self, solution: AgcspSolution) -> float:
+        dist = 0.0
         for i in range(len(solution.path) - 1):
             u, v = solution.path[i], solution.path[i + 1]
-            solution.travelled_distance += np.linalg.norm(np.array(u) - np.array(v))    # TODO: Address conversion overhead
+            dist += np.linalg.norm(np.array(u) - np.array(v))    # TODO: Address conversion overhead
+
+        return dist
     
+    @cache_on_solution
     def _calculate_manouver_complexity_penalty(self, solution: AgcspSolution) -> float:
         """
         Calculates the maneuver complexity penalty based on the angles between consecutive path segments.
@@ -36,6 +42,10 @@ class AgcspEvaluator:
         Formula: P_M(S) = sum(1 + cos(theta_i)) for i from 2 to k-1
         where theta_i is the angle at point i between segments (i-1, i) and (i, i+1)
         """
+
+        if 'manouver_complexity_penalty' in solution.cache:
+            return solution.cache['manouver_complexity_penalty']
+
         if len(solution.path) < 3:
             return 0.0
         
@@ -58,10 +68,12 @@ class AgcspEvaluator:
             if norm_v1 > 0 and norm_v2 > 0:
                 cos_theta = np.dot(v1, v2) / (norm_v1 * norm_v2)
                 penalty += 1 - cos_theta
-        
+
+        solution._cache['manouver_complexity_penalty'] = penalty
         return penalty
 
     #region Coverage evaluation methods:
+    @cache_on_solution
     def calculate_coverage_proportion(self, solution: AgcspSolution) -> float:
         """
         Efficiently calculates the proportion of covered nodes.
