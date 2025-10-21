@@ -131,8 +131,6 @@ class AgcspEvaluator:
     #endregion
 
     #region Neighborhood steps evaluation methods:
-    
-
 
     def evaluate_removal_delta(self, solution: AgcspSolution, node_idx: int) -> float:
         # Item a) Removal Method
@@ -184,40 +182,41 @@ class AgcspEvaluator:
         new_objfun = self.alpha * new_distance + self.beta * new_coverage + self.gamma * new_mcp
         return new_objfun - solution.cache.get('objfun')
 
-    def evaluate_edge_insertion_delta(self, solution: AgcspSolution, node: int, position: int) -> float:
+    def evaluate_swap_delta(self, solution: AgcspSolution, idx1: int, idx2: int) -> float:
         """
-        Item b) Insertion Method.
-        Takes a node that is already in the path and evaluates the cost of removing it from its current position
-        and inserting it at the specified position.
+        Swaps the nodes at positions idx1 and idx2 in the solution's path and evaluates the change in the objective function.
+
+        PLACHOLDER IMPLEMENTATION - TO BE OPTIMIZED LATER (once the addition and removal deltas are optimally implemented).
         """
-        
-        if position < 0 or position > len(solution.path):
-            raise ValueError("Position is out of bounds.")
-        
-        original_index = solution.path.index(node) # This will raise ValueError if not found
-        
-        if original_index == position or original_index == position - 1:
+        if idx1 < 0 or idx1 >= len(solution.path) or idx2 < 0 or idx2 >= len(solution.path):
+            raise ValueError("Node indices are out of bounds.")
+        if idx1 == idx2:
             return 0.0
-        
-        # Calculate cost of removing node from its original position
-        if original_index == 0:
-            removal_cost = self.instance._distances[node][solution.path[1]]
-        elif original_index == len(solution.path) - 1:
-            removal_cost = self.instance._distances[solution.path[-2]][node]
-        else:
-            removal_cost = (self.instance._distances[solution.path[original_index - 1]][node] +
-                            self.instance._distances[node][solution.path[original_index + 1]] -
-                            self.instance._distances[solution.path[original_index - 1]][solution.path[original_index + 1]])
-        
-        # Calculate cost of inserting node at the new position
-        if position == 0:
-            insertion_cost = self.instance._distances[node][solution.path[0]]
-        elif position == len(solution.path):
-            insertion_cost = self.instance._distances[solution.path[-1]][node]
-        else:
-            insertion_cost = (self.instance._distances[solution.path[position - 1]][node] +
-                              self.instance._distances[node][solution.path[position]] -
-                              self.instance._distances[solution.path[position - 1]][solution.path[position]])
-        
-        return removal_cost + insertion_cost
+
+        old_distance = solution.cache.get('path_length')
+        old_coverage = solution.cache.get('coverage_proportion')
+        old_mcp = solution.cache.get('manouver_complexity_penalty')
+
+        if old_distance is None or old_coverage is None or old_mcp is None:
+            raise ValueError("Solution must have been evaluated before calling this method.")
+
+        new_path = solution.path.copy()
+        temp = new_path[idx1].copy()
+        new_path[idx1] = new_path[idx2]
+        new_path[idx2] = temp
+
+        print("new_path:", new_path)
+        new_objfun = self.objfun(AgcspSolution(new_path))
+
+        print("new_objfun:", new_objfun)
+        return new_objfun - solution.cache.get('objfun')
+    
+    def evaluate_2opt_delta(self, solution: AgcspSolution, idx1: int, idx2: int) -> float:
+        """
+        Takes connection idx1->idx1+1 and idx2->idx2+1 and reverses the path between idx1+1 and idx2.
+
+        PLACHOLDER IMPLEMENTATION - TO BE OPTIMIZED LATER (once the addition and removal deltas are optimally implemented).
+        """
+        pass
+
     #endregion
