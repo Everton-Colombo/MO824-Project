@@ -13,6 +13,7 @@ class AgcspEvaluator:
         self.beta = 1.0   # Weight for travelled distance
         self.gamma = 1.0  # Weight for maneuver complexity penalty
     
+    #region Objective Function and Components
     @cache_on_solution
     def objfun(self, solution: AgcspSolution) -> float:
         coverage_proportion = self.coverage_proportion(solution)
@@ -121,7 +122,9 @@ class AgcspEvaluator:
         
         distances = distance_transform_edt(~path_grid)
         return distances <= (sprayer_length / 2.0)
+    #endregion
 
+    #region Delta Evaluation Methods
     def evaluate_removal_delta(self, solution: AgcspSolution, node_idx: int) -> float:
         """ Calculates the delta when removing one node. """
         path = np.array(solution.path)
@@ -311,3 +314,4 @@ class AgcspEvaluator:
         new_cost = (self.alpha * (1 - new_coverage) + self.beta * new_distance + self.gamma * new_mcp)
                     
         return new_cost - old_cost
+    #endregion
