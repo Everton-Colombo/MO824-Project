@@ -283,4 +283,31 @@ class AgcspEvaluator:
         return new_cost - old_cost
 
 
-    
+    def evaluate_2opt_delta(self, solution: AgcspSolution, i: int, j: int) -> float:
+        """ Calculates the delta in the objective function when performing a 2-Opt move. """
+        path = np.array(solution.path)
+        
+        if i >= j - 1 or i < 0 or j >= len(path) - 1:
+            return 0.0
+
+        old_cost = self.objfun(solution)
+        old_distance = solution.cache.get("path_length", 0.0)
+
+        p_i, p_i_plus_1 = path[i], path[i+1]
+        p_j, p_j_plus_1 = path[j], path[j+1]
+
+        dist_removed = np.linalg.norm(p_i - p_i_plus_1) + np.linalg.norm(p_j - p_j_plus_1)
+        dist_added = np.linalg.norm(p_i - p_j) + np.linalg.norm(p_i_plus_1 - p_j_plus_1)
+        
+        delta_distance = dist_added - dist_removed
+        new_distance = old_distance + delta_distance
+
+        new_path = np.concatenate([path[:i+1], path[j:i:-1], path[j+1:]])
+        temp_solution = AgcspSolution(new_path)
+        new_coverage = self.coverage_proportion(temp_solution)
+        
+        new_mcp = self.manouver_complexity_penalty(temp_solution)
+
+        new_cost = (self.alpha * (1 - new_coverage) + self.beta * new_distance + self.gamma * new_mcp)
+                    
+        return new_cost - old_cost
