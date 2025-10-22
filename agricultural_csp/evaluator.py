@@ -220,3 +220,67 @@ class AgcspEvaluator:
                     self.gamma * new_mcp)
                     
         return new_cost - old_cost
+
+    def _calculate_angle_penalty_at_node(self, p_prev: Node, p_curr: Node, p_next: Node) -> float:
+        """ Calculates the maneuver penalty for a single node in the middle of a path. """
+        v1 = p_curr - p_prev
+        v2 = p_next - p_curr
+
+        norm_v1 = np.linalg.norm(v1)
+        norm_v2 = np.linalg.norm(v2)
+
+        if norm_v1 == 0 or norm_v2 == 0:
+            return 0.0
+
+        cos_theta = np.dot(v1, v2) / (norm_v1 * norm_v2)
+        cos_theta = np.clip(cos_theta, -1.0, 1.0)
+        return 1 - cos_theta
+
+
+    def evaluate_insertion_delta(self, solution: AgcspSolution, node_to_insert: Node, position: int) -> float:
+        """ Calculates the delta in the objective function when inserting a new node. """
+        if position < 0 or position > len(solution.path):
+            raise ValueError("Insertion position is out of bounds.")
+            
+        old_cost = self.objfun(solution)
+        old_distance = solution.cache.get("path_length", 0.0)
+        old_mcp = solution.cache.get("manouver_complexity_penalty", 0.0)
+
+        path = np.array(solution.path)
+        node_to_insert = np.array(node_to_insert)
+
+        delta_distance = 0.0
+        if len(path) == 0:
+            pass
+        elif position == 0:
+            delta_distance = np.linalg.norm(node_to_insert - path[0])
+        elif position == len(path):
+            delta_distance = np.linalg.norm(path[-1] - node_to_insert)
+        else:
+            p_prev, p_next = path[position - 1], path[position]
+            delta_distance = (np.linalg.norm(p_prev - node_to_insert) + 
+                              np.linalg.norm(node_to_insert - p_next) - 
+                              np.linalg.norm(p_prev - p_next))
+        new_distance = old_distance + delta_distance
+
+        delta_mcp = 0.0
+        if position > 0 and position < len(path):
+            delta_mcp += self._calculate_angle_penalty_at_node(path[position-1], node_to_insert, path[position])
+        if position > 1:
+            delta_mcp -= self._calculate_angle_penalty_at_node(path[position-2], path[position-1], path[position])
+            delta_mcp += self._calculate_angle_penalty_at_node(path[position-2], path[position-1], node_to_insert)
+        if position < len(path) - 1:
+            delta_mcp -= self._calculate_angle_penalty_at_node(path[position-1], path[position], path[position+1])
+            delta_mcp += self._calculate_angle_penalty_at_node(node_to_insert, path[position], path[position+1])
+        new_mcp = old_mcp + delta_mcp
+
+        new_path = np.insert(path, position, node_to_insert, axis=0)
+        temp_solution = AgcspSolution(new_path)
+        new_coverage = self.coverage_proportion(temp_solution)
+        
+        new_cost = (self.alpha * (1 - new_coverage) + self.beta * new_distance + self.gamma * new_mcp)
+                    
+        return new_cost - old_cost
+
+
+    
