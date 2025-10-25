@@ -10,8 +10,6 @@ from collections import deque
 from typing import Literal
 from dataclasses import dataclass
 
-PLACE_HOLDER = -1
-
 class RestartIntensificationComponent():
     def __init__(self, instance: AgcspInstance = None, restart_patience: int = 100, max_fixed_elements: int = 3):
         pass
@@ -70,7 +68,7 @@ class AgcspTS(Solver):
         
         # TS-specific properties
         self.strategy = strategy
-        self.tabu_list = None
+        self.tabu_list = deque([None] * tenure, maxlen=tenure)
         
         
         # # Initialize IBR component if present
@@ -108,9 +106,9 @@ class AgcspTS(Solver):
             # Update execution state (handles best solution tracking)
             self._update_execution_state()
             
-            # Update IBR memory if enabled
-            if self.strategy.ibr_component is not None:
-                self.strategy.ibr_component.update_recency_memory(self.best_solution)
+            # # Update IBR memory if enabled
+            # if self.strategy.ibr_component is not None:
+            #     self.strategy.ibr_component.update_recency_memory(self.best_solution)
         
         self.execution_time = time.time() - self._start_time
         return self.best_solution
@@ -134,6 +132,18 @@ class AgcspTS(Solver):
         Constructs an initial feasible solution..
         """
         pass
+    
+    def _apply_move(self, solution: AgcspSolution, move: str, move_args: tuple) -> AgcspSolution:
+        if move == 'insert':
+            node, index = move_args
+            new_path = solution.path[:index] + [node] + solution.path[index:]
+            return AgcspSolution(new_path)
+        elif move == 'remove':
+            index, = move_args
+            new_path = solution.path[:index] + solution.path[index+1:]
+            return AgcspSolution(new_path)
+        else:
+            raise ValueError(f"Unknown move type: {move}")
 
     def _neighborhood_move(self, solution: AgcspSolution) -> AgcspSolution:
         if self.strategy.search_strategy == 'first':
@@ -144,8 +154,27 @@ class AgcspTS(Solver):
             raise ValueError(f"Unknown search strategy: {self.strategy.search_strategy}")
 
     def _neighborhood_move_best_improving(self, solution: AgcspSolution) -> AgcspSolution:
-        pass
+        raise NotImplementedError("Best improving move not implemented yet.")
 
     def _neighborhood_move_first_improving(self, solution: AgcspSolution) -> AgcspSolution:
-        pass
+        # Evaluating insertions
+        cl = [node for node in self.instance.grid_nodes if node not in solution.path]
+        for node in cl:
+            if node in self.tabu_list:
+                continue
+            
+            path_indexes = random.sample(range(len(solution.path) + 1), len(solution.path) + 1)
+            for index in path_indexes:
+                delta = self.evaluator.evaluate_insertion_delta(solution, node, index)
+                if delta < 0:
+                    return self._apply_move(solution, ('insert', node, index))
+        
+        # Evaluating removals
+        for index in range(len(solution.path)):
+            if solution.path[index] in self.tabu_list:
+                continue
 
+            delta = self.evaluator.evaluate_removal_delta(solution, index)
+            if delta < 0:
+                return self._apply_move(solution, ('remove', index))
+        return solution
