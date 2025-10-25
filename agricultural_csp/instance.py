@@ -18,6 +18,9 @@ class AgcspInstance:
         
         self._perform_precomputations()
 
+    @property
+    def nodes_to_cover_count(self) -> int:
+        return self.node_count - len(self.obstacle_nodes)
 
     def _perform_precomputations(self):
         self.node_count = len(self.grid_nodes)

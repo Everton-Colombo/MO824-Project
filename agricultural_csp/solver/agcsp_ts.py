@@ -9,6 +9,7 @@ import time
 from collections import deque
 from typing import Literal
 from dataclasses import dataclass
+from scipy.spatial.distance import cdist
 
 class RestartIntensificationComponent():
     def __init__(self, instance: AgcspInstance = None, restart_patience: int = 100, max_fixed_elements: int = 3):
@@ -129,11 +130,99 @@ class AgcspTS(Solver):
     
     def _constructive_heuristic(self) -> AgcspSolution:
         """
-        Constructs an initial feasible solution..
+        Constructs an initial feasible solution.
         """
-        pass
-    
+        
+        solution = AgcspSolution(path=[tuple(self.instance.grid_nodes[0])])
+        uncovered_nodes = set(tuple(node) for node in self.instance.grid_nodes)
+        
+        while not self.evaluator.is_feasible(solution):
+            # Get currently covered nodes and update uncovered set
+            coverage_mask = self.evaluator._coverage_mask(solution)
+            covered_indices = np.argwhere(coverage_mask)
+            covered_nodes_coords = covered_indices + self.instance.min_coords
+            covered_nodes_set = set(tuple(node) for node in covered_nodes_coords)
+            
+            # Update uncovered nodes
+            uncovered_nodes = uncovered_nodes - covered_nodes_set
+            
+            current_coverage = self.evaluator.coverage_proportion(solution)
+            print(f"Current coverage: {current_coverage:.4f}, path length: {len(solution.path)}, uncovered: {len(uncovered_nodes)}")
+            
+            # Select candidate nodes (uncovered and not in path)
+            path_set = set(tuple(node) if isinstance(node, (list, np.ndarray)) else node for node in solution.path)
+            candidate_nodes = list(uncovered_nodes - path_set)
+            
+            if not candidate_nodes:
+                print("No more candidate nodes to add, but solution is still infeasible.")
+                break
+            
+            # Shuffle to try different nodes each iteration
+            random.shuffle(candidate_nodes)
+            
+            node_added = False
+            for node in candidate_nodes:
+                # Try adding the node
+                new_path = list(solution.path) + [node]
+                new_solution = AgcspSolution(new_path)
+                
+                # Skip if hits obstacle (but don't discard from uncovered - may work later)
+                if self.evaluator.hits_obstacle(new_solution):
+                    continue
+                
+                # Add node if it improves coverage
+                new_coverage = self.evaluator.coverage_proportion(new_solution)
+                if new_coverage > current_coverage:
+                    solution = new_solution
+                    node_added = True
+                    break
+            
+            # If no node could be added, try covered nodes near uncovered areas
+            if not node_added:
+                print(f"No valid uncovered nodes found. Trying covered nodes near uncovered areas...")
+                
+                # Find covered nodes within w/2 distance of uncovered nodes
+                half_sprayer = self.instance.sprayer_length / 2
+                uncovered_arr = np.array(list(uncovered_nodes))
+                covered_arr = np.array(list(covered_nodes_set - path_set))
+                
+                if len(covered_arr) > 0 and len(uncovered_arr) > 0:
+                    # Calculate distances between covered and uncovered nodes
+                    distances = cdist(covered_arr, uncovered_arr)
+                    
+                    # Find covered nodes within half_sprayer distance of any uncovered node
+                    near_uncovered_mask = np.any(distances <= half_sprayer, axis=1)
+                    nearby_covered_nodes = covered_arr[near_uncovered_mask]
+                    
+                    if len(nearby_covered_nodes) > 0:
+                        # Shuffle and try these nodes
+                        np.random.shuffle(nearby_covered_nodes)
+                        
+                        for node in nearby_covered_nodes:
+                            node_tuple = tuple(node)
+                            new_path = list(solution.path) + [node_tuple]
+                            new_solution = AgcspSolution(new_path)
+                            
+                            if self.evaluator.hits_obstacle(new_solution):
+                                continue
+                            
+                            new_coverage = self.evaluator.coverage_proportion(new_solution)
+                            if new_coverage > current_coverage:
+                                solution = new_solution
+                                node_added = True
+                                print(f"Added covered node near uncovered area: {node_tuple}")
+                                break
+            
+            # If still no node could be added, we're stuck
+            if not node_added:
+                print(f"Could not find any valid node to add from {len(candidate_nodes)} candidates.")
+                break
+
+        return solution
+
     def _apply_move(self, solution: AgcspSolution, move: str, move_args: tuple) -> AgcspSolution:
+        """Applies a move to the given solution and returns the new solution."""
+        
         if move == 'insert':
             node, index = move_args
             new_path = solution.path[:index] + [node] + solution.path[index:]

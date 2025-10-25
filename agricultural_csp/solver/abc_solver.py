@@ -4,9 +4,9 @@ import time
 
 from typing import Literal
 
-from ..instance import *
-from ..solution import *
-from ..evaluator import *
+from agricultural_csp.instance import *
+from agricultural_csp.solution import *
+from agricultural_csp.evaluator import *
 
 @dataclass
 class TerminationCriteria:

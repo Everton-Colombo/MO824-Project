@@ -2,8 +2,8 @@ from scipy.ndimage import distance_transform_edt
 from skimage.draw import line
 import numpy as np
 
-from instance import *
-from solution import *
+from .instance import *
+from .solution import *
 
 class AgcspEvaluator:
     
@@ -68,13 +68,25 @@ class AgcspEvaluator:
         Efficiently calculates the proportion of covered nodes.
         Also sets a flag in the solution if any obstacle is hit.
         """
+        
+        if len(solution.path) == 0:
+            solution.cache['hits_obstacle'] = False
+            return 0.0
 
-        final_coverage_mask = self._get_coverage_mask(solution.path)
+        final_coverage_mask = self._coverage_mask(solution)
         solution.cache['hits_obstacle'] = np.any(final_coverage_mask & self.instance.obstacle_mask)
         
         num_covered_nodes = np.sum(final_coverage_mask)
-        return num_covered_nodes / self.instance.node_count
+        return num_covered_nodes / self.instance.nodes_to_cover_count
     
+    @cache_on_solution
+    def hits_obstacle(self, solution: AgcspSolution) -> bool:
+        if len(solution.path) == 0:
+            return False
+                
+        final_coverage_mask = self._coverage_mask(solution)
+        return np.any(final_coverage_mask & self.instance.obstacle_mask)
+
     def get_covered_nodes_list(self, path_points: List[Node]) -> np.ndarray:
         """
         Calculates the covered nodes for a given path.
@@ -82,7 +94,7 @@ class AgcspEvaluator:
         For the optimization process, use calculate_coverage_proportion instead.
         """
 
-        final_coverage_mask = self._get_coverage_mask(path_points)
+        final_coverage_mask = self._coverage_mask(path_points)
 
         # Convert covered indices back to the original coordinate system
         covered_indices_shifted = np.argwhere(final_coverage_mask)
@@ -90,12 +102,17 @@ class AgcspEvaluator:
 
         return covered_nodes
 
-    def _get_coverage_mask(self, path_points: List[Node]) -> np.ndarray:
+    @cache_on_solution
+    def _coverage_mask(self, solution: AgcspSolution | List[Node]) -> np.ndarray:
         """
         Calculates the coverage mask for a given path.
         This is done using a distance transform approach, which requires a rectangular grid.
         """
-        path_arr = np.array(path_points)
+        if isinstance(solution, AgcspSolution):
+            path_arr = np.array(solution.path)
+        else:
+            path_arr = np.array(solution)
+
         shifted_path = path_arr - self.instance.min_coords
 
         rectangular_coverage = self._get_rectangular_coverage(
@@ -315,3 +332,8 @@ class AgcspEvaluator:
                     
         return new_cost - old_cost
     #endregion
+    
+    def is_feasible(self, solution: AgcspSolution) -> bool:
+        """ Checks if the solution is feasible (i.e., does not hit any obstacles). """
+
+        return not self.hits_obstacle(solution) and self.coverage_proportion(solution) >= 0.98
