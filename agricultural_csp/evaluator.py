@@ -77,7 +77,7 @@ class AgcspEvaluator:
         solution.cache['hits_obstacle'] = np.any(final_coverage_mask & self.instance.obstacle_mask)
         
         num_covered_nodes = np.sum(final_coverage_mask)
-        return num_covered_nodes / self.instance.nodes_to_cover_count
+        return num_covered_nodes / len(self.instance.field_nodes)
     
     @cache_on_solution
     def hits_obstacle(self, solution: AgcspSolution) -> bool:

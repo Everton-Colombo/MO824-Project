@@ -6,21 +6,33 @@ Node = Tuple[float, float]
 class AgcspInstance:
 
     def __init__(self, grid_nodes: List[Node], obstacle_nodes: List[Node], sprayer_length: float):
+        """
+        Initializes the AgcspInstance with grid nodes, obstacle nodes, and sprayer length.
+        
+        grid_nodes: List of all nodes in the grid, including both field and obstacle nodes.
+        obstacle_nodes: List of nodes that are obstacles.
+        """
+        
         self.grid_nodes = np.array(grid_nodes)
+    
+        # Convert to sets of tuples for proper comparison. This must be done in case
+        # nodes are given as numpy arrays.
+        grid_set = set(map(tuple, grid_nodes))
+        obstacle_set = set(map(tuple, obstacle_nodes))
+        
+        # Validate obstacles are in grid
+        for obs in obstacle_set:
+            if obs not in grid_set:
+                raise ValueError(f"Obstacle node {obs} is not in grid nodes.")
+        
+        self.obstacle_nodes = np.array(obstacle_nodes)
+        
+        field_set = grid_set - obstacle_set
+        self.field_nodes = np.array(list(field_set))
         
         self.sprayer_length = sprayer_length
-        for obs in obstacle_nodes:
-            if obs not in grid_nodes:
-                raise ValueError(f"Obstacle node {obs} is not in grid nodes.")
-        self.obstacle_nodes = np.array(obstacle_nodes)
-
-        self.distance_cache = {}
         
         self._perform_precomputations()
-
-    @property
-    def nodes_to_cover_count(self) -> int:
-        return self.node_count - len(self.obstacle_nodes)
 
     def _perform_precomputations(self):
         self.node_count = len(self.grid_nodes)
