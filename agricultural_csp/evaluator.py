@@ -9,20 +9,18 @@ class AgcspEvaluator:
     
     def __init__(self, instance: AgcspInstance):
         self.instance = instance
+        self.alpha = 1.0  # Weight for coverage proportion
+        self.beta = 1.0   # Weight for travelled distance
+        self.gamma = 1.0  # Weight for maneuver complexity penalty
     
-    #region Objective function (and its components) evaluation methods:
+    #region Objective Function and Components
     @cache_on_solution
     def objfun(self, solution: AgcspSolution) -> float:
-        alpha, beta, gamma = 1.0, 1.0, 1.0 # Weights for the three components
-        
         coverage_proportion = self.coverage_proportion(solution)
         travelled_distance = self.path_length(solution)
         manouver_complexity_penalty = self.manouver_complexity_penalty(solution)
-        
-        objfun =  (alpha * (1 - coverage_proportion) +
-                    beta * travelled_distance +
-                    gamma * manouver_complexity_penalty)
-        return objfun
+
+        return (self.alpha * (1 - coverage_proportion) + self.beta * travelled_distance + self.gamma * manouver_complexity_penalty)
 
     @cache_on_solution
     def path_length(self, solution: AgcspSolution) -> float:
@@ -64,7 +62,6 @@ class AgcspEvaluator:
             
         return penalty
 
-    #region Coverage evaluation methods:
     @cache_on_solution
     def coverage_proportion(self, solution: AgcspSolution) -> float:
         """
@@ -126,75 +123,195 @@ class AgcspEvaluator:
         distances = distance_transform_edt(~path_grid)
         return distances <= (sprayer_length / 2.0)
     #endregion
-    
-    #endregion
 
-    #region Neighborhood steps evaluation methods:
-    
-    def evaluate_removal_delta(self, solution: AgcspSolution, node: int) -> float:
-        # Item a) Removal Method
-        if node not in solution.path:
-            raise ValueError("Node to be removed is not in the solution path.")
-        
-        idx = solution.path.index(node)
-        
-        if idx == 0 or idx == len(solution.path) - 1:
-            # If it's the first or last node, just remove it
-            if idx == 0:
-                # First node
-                new_distance = solution.travelled_distance - self.instance._distances[node][solution.path[1]]
-            else:
-                # Last node
-                new_distance = solution.travelled_distance - self.instance._distances[solution.path[-2]][node]
+    #region Delta Evaluation Methods
+    def evaluate_removal_delta(self, solution: AgcspSolution, node_idx: int) -> float:
+        """ Calculates the delta when removing one node. """
+        path = np.array(solution.path)
+        if node_idx < 0 or node_idx >= len(path):
+            raise ValueError("Node index for removal is out of bounds.")
+
+        old_cost = self.objfun(solution)
+        old_distance = solution.cache.get("path_length", 0.0)
+        old_mcp = solution.cache.get("manouver_complexity_penalty", 0.0)
+
+        delta_distance = 0.0
+        if len(path) <= 1:
+            new_distance = 0.0
+        elif node_idx == 0:
+            delta_distance = -np.linalg.norm(path[0] - path[1])
+        elif node_idx == len(path) - 1:
+            delta_distance = -np.linalg.norm(path[-2] - path[-1])
         else:
-            # Remove the node and add the distance between its neighbors
-            new_distance = solution.travelled_distance
-            new_distance -= self.instance._distances[solution.path[idx - 1]][node]
-            new_distance -= self.instance._distances[node][solution.path[idx + 1]]
-            new_distance += self.instance._distances[solution.path[idx - 1]][solution.path[idx + 1]]
+            p_prev, p_curr, p_next = path[node_idx - 1], path[node_idx], path[node_idx + 1]
+            dist_removed = np.linalg.norm(p_prev - p_curr) + np.linalg.norm(p_curr - p_next)
+            dist_added = np.linalg.norm(p_prev - p_next)
+            delta_distance = dist_added - dist_removed
+        new_distance = old_distance + delta_distance
 
-        return solution.travelled_distance - new_distance
-    
-    def evaluate_edge_insertion_delta(self, solution: AgcspSolution, node: int, position: int) -> float:
-        """
-        Item b) Insertion Method.
-        Takes a node that is already in the path and evaluates the cost of removing it from its current position
-        and inserting it at the specified position.
-        """
+        delta_mcp = 0.0
+        if node_idx > 0 and node_idx < len(path) - 1:
+            delta_mcp -= self._calculate_angle_penalty_at_node(path[node_idx-1], path[node_idx], path[node_idx+1])
+        if node_idx > 1:
+            delta_mcp -= self._calculate_angle_penalty_at_node(path[node_idx-2], path[node_idx-1], path[node_idx])
+            if node_idx < len(path) - 1:
+                delta_mcp += self._calculate_angle_penalty_at_node(path[node_idx-2], path[node_idx-1], path[node_idx+1])
+        if node_idx < len(path) - 2:
+            delta_mcp -= self._calculate_angle_penalty_at_node(path[node_idx], path[node_idx+1], path[node_idx+2])
+            if node_idx > 0:
+                delta_mcp += self._calculate_angle_penalty_at_node(path[node_idx-1], path[node_idx+1], path[node_idx+2])
+        new_mcp = old_mcp + delta_mcp
         
-        if position < 0 or position > len(solution.path):
-            raise ValueError("Position is out of bounds.")
-        
-        original_index = solution.path.index(node) # This will raise ValueError if not found
-        
-        if original_index == position or original_index == position - 1:
+        new_path_for_coverage = np.delete(path, node_idx, axis=0)
+        temp_solution = AgcspSolution(new_path_for_coverage)
+        new_coverage = self.coverage_proportion(temp_solution)
+
+        new_cost = (self.alpha * (1 - new_coverage) + self.beta * new_distance + self.gamma * new_mcp)
+                    
+        return new_cost - old_cost
+
+    def evaluate_swap_delta(self, solution: AgcspSolution, idx1: int, idx2: int) -> float:
+        """ Calculates the delta when swapping two nodes. """
+        path = np.array(solution.path)
+        if idx1 < 0 or idx1 >= len(solution.path) or idx2 < 0 or idx2 >= len(solution.path):
+            raise ValueError("Node indices are out of bounds.")
+        if idx1 == idx2:
             return 0.0
-        
-        # Calculate cost of removing node from its original position
-        if original_index == 0:
-            removal_cost = self.instance._distances[node][solution.path[1]]
-        elif original_index == len(solution.path) - 1:
-            removal_cost = self.instance._distances[solution.path[-2]][node]
-        else:
-            removal_cost = (self.instance._distances[solution.path[original_index - 1]][node] +
-                            self.instance._distances[node][solution.path[original_index + 1]] -
-                            self.instance._distances[solution.path[original_index - 1]][solution.path[original_index + 1]])
-        
-        # Calculate cost of inserting node at the new position
-        if position == 0:
-            insertion_cost = self.instance._distances[node][solution.path[0]]
-        elif position == len(solution.path):
-            insertion_cost = self.instance._distances[solution.path[-1]][node]
-        else:
-            insertion_cost = (self.instance._distances[solution.path[position - 1]][node] +
-                              self.instance._distances[node][solution.path[position]] -
-                              self.instance._distances[solution.path[position - 1]][solution.path[position]])
-        
-        return removal_cost + insertion_cost
 
-    def is_feasible(self, solution: AgcspSolution) -> bool:
-        covered = set()
-        for node in solution.path:
-            covered.update(self.instance.coverage.get(node, {node}))
-        return len(covered) == len(self.instance.grid_nodes)
+        old_cost = self.objfun(solution)
+        old_distance = solution.cache.get("path_length", 0.0)
+
+        if idx1 > idx2:
+            idx1, idx2 = idx2, idx1
+
+        p1, p2 = path[idx1], path[idx2]
+
+        p1_prev = path[idx1 - 1] if idx1 > 0 else None
+        p1_next = path[idx1 + 1] if idx1 < len(path) - 1 else None
+
+        p2_prev = path[idx2 - 1] if idx2 > 0 else None
+        p2_next = path[idx2 + 1] if idx2 < len(path) - 1 else None
+
+        dist_removed = 0
+        if p1_prev is not None: dist_removed += np.linalg.norm(p1_prev - p1)
+        if p1_next is not None: dist_removed += np.linalg.norm(p1 - p1_next)
+        if p2_prev is not None and p2_prev is not p1: dist_removed += np.linalg.norm(p2_prev - p2)
+        if p2_next is not None: dist_removed += np.linalg.norm(p2 - p2_next)
+
+        dist_added = 0
+        if p1_prev is not None: dist_added += np.linalg.norm(p1_prev - p2)
+        if p1_next is not None: dist_added += np.linalg.norm(p2 - p1_next)
+        if p2_prev is not None and p2_prev is not p1: dist_added += np.linalg.norm(p2_prev - p1)
+        if p2_next is not None: dist_added += np.linalg.norm(p1 - p2_next)
+
+        if idx2 == idx1 + 1:
+            dist_removed = (np.linalg.norm(p1_prev - p1) if p1_prev is not None else 0) + np.linalg.norm(p1 - p2) + (np.linalg.norm(p2 - p2_next) if p2_next is not None else 0)
+            dist_added = (np.linalg.norm(p1_prev - p2) if p1_prev is not None else 0) + np.linalg.norm(p2 - p1) + (np.linalg.norm(p1 - p2_next) if p2_next is not None else 0)
+
+        delta_distance = dist_added - dist_removed
+        new_distance = old_distance + delta_distance
+
+        new_path = path.copy()
+        new_path[idx1], new_path[idx2] = new_path[idx2].copy(), new_path[idx1].copy()
+        
+        temp_solution = AgcspSolution(new_path)
+        new_coverage = self.coverage_proportion(temp_solution)
+        new_mcp = self.manouver_complexity_penalty(temp_solution)
+
+        new_cost = (self.alpha * (1 - new_coverage) +
+                    self.beta * new_distance +
+                    self.gamma * new_mcp)
+                    
+        return new_cost - old_cost
+
+    def _calculate_angle_penalty_at_node(self, p_prev: Node, p_curr: Node, p_next: Node) -> float:
+        """ Calculates the maneuver penalty for a single node in the middle of a path. """
+        v1 = p_curr - p_prev
+        v2 = p_next - p_curr
+
+        norm_v1 = np.linalg.norm(v1)
+        norm_v2 = np.linalg.norm(v2)
+
+        if norm_v1 == 0 or norm_v2 == 0:
+            return 0.0
+
+        cos_theta = np.dot(v1, v2) / (norm_v1 * norm_v2)
+        cos_theta = np.clip(cos_theta, -1.0, 1.0)
+        return 1 - cos_theta
+
+
+    def evaluate_insertion_delta(self, solution: AgcspSolution, node_to_insert: Node, position: int) -> float:
+        """ Calculates the delta in the objective function when inserting a new node. """
+        if position < 0 or position > len(solution.path):
+            raise ValueError("Insertion position is out of bounds.")
+            
+        old_cost = self.objfun(solution)
+        old_distance = solution.cache.get("path_length", 0.0)
+        old_mcp = solution.cache.get("manouver_complexity_penalty", 0.0)
+
+        path = np.array(solution.path)
+        node_to_insert = np.array(node_to_insert)
+
+        delta_distance = 0.0
+        if len(path) == 0:
+            pass
+        elif position == 0:
+            delta_distance = np.linalg.norm(node_to_insert - path[0])
+        elif position == len(path):
+            delta_distance = np.linalg.norm(path[-1] - node_to_insert)
+        else:
+            p_prev, p_next = path[position - 1], path[position]
+            delta_distance = (np.linalg.norm(p_prev - node_to_insert) + 
+                              np.linalg.norm(node_to_insert - p_next) - 
+                              np.linalg.norm(p_prev - p_next))
+        new_distance = old_distance + delta_distance
+
+        delta_mcp = 0.0
+        if position > 0 and position < len(path):
+            delta_mcp += self._calculate_angle_penalty_at_node(path[position-1], node_to_insert, path[position])
+        if position > 1:
+            delta_mcp -= self._calculate_angle_penalty_at_node(path[position-2], path[position-1], path[position])
+            delta_mcp += self._calculate_angle_penalty_at_node(path[position-2], path[position-1], node_to_insert)
+        if position < len(path) - 1:
+            delta_mcp -= self._calculate_angle_penalty_at_node(path[position-1], path[position], path[position+1])
+            delta_mcp += self._calculate_angle_penalty_at_node(node_to_insert, path[position], path[position+1])
+        new_mcp = old_mcp + delta_mcp
+
+        new_path = np.insert(path, position, node_to_insert, axis=0)
+        temp_solution = AgcspSolution(new_path)
+        new_coverage = self.coverage_proportion(temp_solution)
+        
+        new_cost = (self.alpha * (1 - new_coverage) + self.beta * new_distance + self.gamma * new_mcp)
+                    
+        return new_cost - old_cost
+
+
+    def evaluate_2opt_delta(self, solution: AgcspSolution, i: int, j: int) -> float:
+        """ Calculates the delta in the objective function when performing a 2-Opt move. """
+        path = np.array(solution.path)
+        
+        if i >= j - 1 or i < 0 or j >= len(path) - 1:
+            return 0.0
+
+        old_cost = self.objfun(solution)
+        old_distance = solution.cache.get("path_length", 0.0)
+
+        p_i, p_i_plus_1 = path[i], path[i+1]
+        p_j, p_j_plus_1 = path[j], path[j+1]
+
+        dist_removed = np.linalg.norm(p_i - p_i_plus_1) + np.linalg.norm(p_j - p_j_plus_1)
+        dist_added = np.linalg.norm(p_i - p_j) + np.linalg.norm(p_i_plus_1 - p_j_plus_1)
+        
+        delta_distance = dist_added - dist_removed
+        new_distance = old_distance + delta_distance
+
+        new_path = np.concatenate([path[:i+1], path[j:i:-1], path[j+1:]])
+        temp_solution = AgcspSolution(new_path)
+        new_coverage = self.coverage_proportion(temp_solution)
+        
+        new_mcp = self.manouver_complexity_penalty(temp_solution)
+
+        new_cost = (self.alpha * (1 - new_coverage) + self.beta * new_distance + self.gamma * new_mcp)
+                    
+        return new_cost - old_cost
     #endregion
