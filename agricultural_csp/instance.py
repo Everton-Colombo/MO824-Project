@@ -5,7 +5,7 @@ Node = Tuple[float, float]
 
 class AgcspInstance:
 
-    def __init__(self, grid_nodes: List[Node], obstacle_nodes: List[Node], sprayer_length: float):
+    def __init__(self, grid_nodes: List[Node], obstacle_nodes: List[Node], sprayer_length: float, max_turn_angle: float):
         """
         Initializes the AgcspInstance with grid nodes, obstacle nodes, and sprayer length.
         
@@ -31,6 +31,7 @@ class AgcspInstance:
         self.field_nodes = np.array(list(field_set))
         
         self.sprayer_length = sprayer_length
+        self.max_turn_angle = max_turn_angle
         
         self._perform_precomputations()
 

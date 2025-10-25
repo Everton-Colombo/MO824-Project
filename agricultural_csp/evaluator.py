@@ -37,7 +37,7 @@ class AgcspEvaluator:
         Calculates the maneuver complexity penalty based on the angles between consecutive path segments.
         The penalty is higher for sharper turns (larger angles).
         
-        Formula: P_M(S) = sum(1 + cos(theta_i)) for i from 2 to k-1
+        Formula: P_M(S) = sum(1 - cos(theta_i)) for i from 2 to k-1
         where theta_i is the angle at point i between segments (i-1, i) and (i, i+1)
         """
         if len(solution.path) < 3:
@@ -49,16 +49,7 @@ class AgcspEvaluator:
             p_curr = np.array(solution.path[i])
             p_next = np.array(solution.path[i + 1])
             
-            # Calculate vectors
-            v1 = p_curr - p_prev
-            v2 = p_next - p_curr
-            
-            # Calculate norms
-            norm_v1 = np.linalg.norm(v1)
-            norm_v2 = np.linalg.norm(v2)
-            
-            cos_theta = np.dot(v1, v2) / (norm_v1 * norm_v2)
-            penalty += 1 - cos_theta
+            penalty += self._calculate_angle_penalty_at_node(p_prev, p_curr, p_next)
             
         return penalty
 
@@ -335,5 +326,14 @@ class AgcspEvaluator:
     
     def is_feasible(self, solution: AgcspSolution) -> bool:
         """ Checks if the solution is feasible (i.e., does not hit any obstacles). """
+        
+        # verify that no angle is too sharp (no turn sharper than 90 degrees)
+        for i in range(1, len(solution.path) - 1):
+            p_prev = np.array(solution.path[i - 1])
+            p_curr = np.array(solution.path[i])
+            p_next = np.array(solution.path[i + 1])
+            
+            if self._calculate_angle_penalty_at_node(p_prev, p_curr, p_next) > (1 - np.cos(np.radians(self.instance.max_turn_angle))):
+                return False
 
         return not self.hits_obstacle(solution) and self.coverage_proportion(solution) >= 0.98

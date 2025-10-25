@@ -136,6 +136,8 @@ class AgcspTS(Solver):
         solution = AgcspSolution(path=[tuple(self.instance.grid_nodes[0])])
         uncovered_nodes = set(tuple(node) for node in self.instance.grid_nodes)
         
+        max_allowed_penalty = 1.0 - float(np.cos(np.deg2rad(self.instance.max_turn_angle)))
+        
         while not self.evaluator.is_feasible(solution):
             # Get currently covered nodes and update uncovered set
             coverage_mask = self.evaluator._coverage_mask(solution)
@@ -169,6 +171,18 @@ class AgcspTS(Solver):
                 # Skip if hits obstacle (but don't discard from uncovered - may work later)
                 if self.evaluator.hits_obstacle(new_solution):
                     continue
+                
+                # Check if adding this node creates a turn sharper than allowed
+                if len(solution.path) >= 2:
+                    p_prev = np.array(solution.path[-2])
+                    p_curr = np.array(solution.path[-1])
+                    p_next = np.array(node)
+                    
+                    angle_penalty = self.evaluator._calculate_angle_penalty_at_node(p_prev, p_curr, p_next)
+                    
+                    # Skip if turn exceeds the maximum allowed angle
+                    if angle_penalty > max_allowed_penalty:
+                        continue
                 
                 # Add node if it improves coverage
                 new_coverage = self.evaluator.coverage_proportion(new_solution)
@@ -205,6 +219,18 @@ class AgcspTS(Solver):
                             
                             if self.evaluator.hits_obstacle(new_solution):
                                 continue
+                            
+                            # Check if adding this node creates a turn sharper than allowed
+                            if len(solution.path) >= 2:
+                                p_prev = np.array(solution.path[-2])
+                                p_curr = np.array(solution.path[-1])
+                                p_next = np.array(node_tuple)
+                                
+                                angle_penalty = self.evaluator._calculate_angle_penalty_at_node(p_prev, p_curr, p_next)
+                                
+                                # Skip if turn exceeds the maximum allowed angle
+                                if angle_penalty > max_allowed_penalty:
+                                    continue
                             
                             new_coverage = self.evaluator.coverage_proportion(new_solution)
                             if new_coverage > current_coverage:
