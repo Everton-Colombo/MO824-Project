@@ -85,13 +85,12 @@ class AgcspEvaluator:
         For the optimization process, use calculate_coverage_proportion instead.
         """
 
-        final_coverage_mask = self._coverage_mask(path_points)
+        coverage_mask_area = self._coverage_mask(path_points)
+        covered_target_nodes_mask = coverage_mask_area & self.instance.target_mask
+        covered_indices_shifted = np.argwhere(covered_target_nodes_mask)
+        covered_nodes_coords = covered_indices_shifted + self.instance.min_coords
 
-        # Convert covered indices back to the original coordinate system
-        covered_indices_shifted = np.argwhere(final_coverage_mask)
-        covered_nodes = covered_indices_shifted + self.instance.min_coords
-
-        return covered_nodes
+        return covered_nodes_coords
 
     @cache_on_solution
     def _coverage_mask(self, solution: AgcspSolution | List[Node]) -> np.ndarray:
@@ -100,9 +99,12 @@ class AgcspEvaluator:
         This is done using a distance transform approach, which requires a rectangular grid.
         """
         if isinstance(solution, AgcspSolution):
-            path_arr = np.array(solution.path)
+            path_arr = np.array(solution.path, dtype=int)
         else:
-            path_arr = np.array(solution)
+            path_arr = np.array(solution, dtype=int)
+
+        if path_arr.size == 0:
+            return np.zeros(self.instance.bounding_box_shape, dtype=bool)
 
         shifted_path = path_arr - self.instance.min_coords
 
@@ -130,6 +132,33 @@ class AgcspEvaluator:
         
         distances = distance_transform_edt(~path_grid)
         return distances <= (sprayer_length / 2.0)
+    #endregion
+
+    #region Path Validation    
+    def is_path_segment_valid(self, p_start: Node, p_end: Node) -> bool:
+        """
+        Checks if the path segment between p_start and p_end collides with any obstacles, considering the width of the sprayer.
+        """
+
+        if np.array_equal(p_start, p_end):
+            return True
+
+        segment_path = np.array([p_start, p_end], dtype=int)
+        shifted_segment = segment_path - self.instance.min_coords
+
+        segment_coverage_mask = self._get_rectangular_coverage(
+            self.instance.bounding_box_shape,
+            shifted_segment,
+            self.instance.sprayer_length
+        )
+
+        collision_mask = segment_coverage_mask & self.instance.obstacle_mask
+        
+        if np.any(collision_mask):
+            return False
+
+        return True
+    
     #endregion
 
     #region Delta Evaluation Methods
