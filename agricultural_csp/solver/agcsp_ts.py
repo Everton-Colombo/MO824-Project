@@ -8,12 +8,13 @@ import time
 from collections import deque
 from typing import Literal
 from dataclasses import dataclass
+import random
 
 from .constructive_heuristics.base_heuristics import (
     ConstructiveHeuristicType,
     BoustrophedonSegmentedHeuristic,
     FSMCoveragePlannerHeuristic,
-    GreedyCoverageHeuristic
+    RandomCoverageHeuristic
 )
 
 class RestartIntensificationComponent():
@@ -139,7 +140,7 @@ class AgcspTS(Solver):
         mapping = {
             'boustrophedon_segmented': BoustrophedonSegmentedHeuristic,
             'fsm_coverage_planner': FSMCoveragePlannerHeuristic,
-            'greedy_coverage': GreedyCoverageHeuristic,
+            'random': RandomCoverageHeuristic,
         }
     
         HeuristicClass = mapping.get(strategy.lower())

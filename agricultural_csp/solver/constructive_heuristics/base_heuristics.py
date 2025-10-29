@@ -14,7 +14,7 @@ class ConstructiveHeuristicType(Enum):
     """Types of constructive heuristics available."""
     BOUSTROPHEDON_SEGMENTED = 'boustrophedon_segmented'
     FSM_COVERAGE_PLANNER = 'fsm_coverage_planner'
-    GREEDY_COVERAGE = 'greedy_coverage'
+    RANDOM = 'random'
 
 class BaseConstructiveHeuristic(ABC):
     """Abstract base class for all constructive heuristics."""
@@ -30,14 +30,14 @@ class BaseConstructiveHeuristic(ABC):
         """
         pass
 
-class GreedyCoverageHeuristic(BaseConstructiveHeuristic):
+class RandomCoverageHeuristic(BaseConstructiveHeuristic):
     """
-    Builds an initial solution using a Greedy approach focused on maximizing coverage step by step.
+    Builds an initial solution using a random approach.
     """
 
     def generate_initial_solution(self) -> AgcspSolution:
         """
-        Performs greedy search, adding the node that improves coverage the most at each step, respecting collision and angle limits.
+        Performs random selection of nodes to build an initial solution, respecting collision and angle limits.
         """
         instance = self.instance
         evaluator = self.evaluator
