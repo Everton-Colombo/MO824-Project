@@ -64,7 +64,7 @@ class Solver(ABC):
             self.stop_reason = "max_time_secs"
             return True
         if self.termination_criteria.target_value is not None and self.best_solution is not None and \
-                self.evaluator.evaluate_objfun(self.best_solution) >= self.termination_criteria.target_value:
+                self.evaluator.objfun(self.best_solution) >= self.termination_criteria.target_value:
             self.stop_reason = "target_value"
             return True
         return False
@@ -74,7 +74,7 @@ class Solver(ABC):
         
         self._iters += 1
         self.execution_time = time.time() - self._start_time
-        if self.best_solution is None or self.evaluator.evaluate_objfun(self._current_solution) > self.evaluator.evaluate_objfun(self.best_solution):
+        if self.best_solution is None or self.evaluator.objfun(self._current_solution) < self.evaluator.objfun(self.best_solution):
             self.best_solution = self._current_solution
             self._iters_wo_improvement = 0
         else:

@@ -10,12 +10,7 @@ from typing import Literal
 from dataclasses import dataclass
 import random
 
-from .constructive_heuristics.base_heuristics import (
-    ConstructiveHeuristicType,
-    BoustrophedonSegmentedHeuristic,
-    FSMCoveragePlannerHeuristic,
-    RandomCoverageHeuristic
-)
+from .constructive_heuristics.base_heuristics import *
 
 class RestartIntensificationComponent():
     def __init__(self, instance: AgcspInstance = None, restart_patience: int = 100, max_fixed_elements: int = 3):
@@ -54,6 +49,9 @@ class TSStrategy():
     """
     Configuration data class for the Tabu Search algorithm.
     """
+    
+    constructive_heuristic: ConstructiveHeuristicType = ConstructiveHeuristicType.RANDOM
+    
     search_strategy: Literal['first', 'best'] = 'first'
     probabilistic_ts: bool = False
     probabilistic_param: float = 0.8
@@ -92,7 +90,7 @@ class AgcspTS(Solver):
         self._reset_execution_state()
         
         # Initialize with constructive heuristic
-        self.best_solution = self._constructive_heuristic()
+        self.best_solution = self._constructive_heuristic(self.strategy.constructive_heuristic)
         self._current_solution = self.best_solution
         
         while not self._check_termination():
@@ -123,28 +121,28 @@ class AgcspTS(Solver):
     def _perform_debug_actions(self):
         """Perform debug actions, such as logging or printing debug information."""
         if self.debug_options.verbose:
-            best_val = f'{self.evaluator.evaluate_objfun(self.best_solution):.2f}' if self.best_solution else 'N/A'
-            current_val = f'{self.evaluator.evaluate_objfun(self._current_solution):.2f}' if self._current_solution else 'N/A'
+            best_val = f'{self.evaluator.objfun(self.best_solution):.2f}' if self.best_solution else 'N/A'
+            current_val = f'{self.evaluator.objfun(self._current_solution):.2f}' if self._current_solution else 'N/A'
             print(f"Iteration {self._iters}: Best ObjFun = {best_val}, Current ObjFun = {current_val}")
 
         if self.debug_options.log_history:
             self.history.append((
                 self._iters, 
-                self.evaluator.evaluate_objfun(self.best_solution) if self.best_solution else 0,
-                self.evaluator.evaluate_objfun(self._current_solution) if self._current_solution else 0
+                self.evaluator.objfun(self.best_solution) if self.best_solution else 0,
+                self.evaluator.objfun(self._current_solution) if self._current_solution else 0
             ))
 
-    def _get_heuristic_builder(self, instance, evaluator, strategy):
+    def _get_heuristic_builder(self, instance, evaluator, strategy: ConstructiveHeuristicType) -> BaseConstructiveHeuristic:
         """Returns the correct instance of the heuristic based on the strategy."""
         
         mapping = {
-            'boustrophedon_segmented': BoustrophedonSegmentedHeuristic,
-            'fsm_coverage_planner': FSMCoveragePlannerHeuristic,
-            'random': RandomCoverageHeuristic,
+            ConstructiveHeuristicType.BOUSTROPHEDON_SEGMENTED: BoustrophedonSegmentedHeuristic,
+            ConstructiveHeuristicType.FSM_COVERAGE_PLANNER: FSMCoveragePlannerHeuristic,
+            ConstructiveHeuristicType.RANDOM: RandomCoverageHeuristic,
         }
-    
-        HeuristicClass = mapping.get(strategy.lower())
-        
+
+        HeuristicClass = mapping.get(strategy)
+
         if HeuristicClass is None:
             raise ValueError(f"Unknown Constructive Heuristic: {strategy}")
 
@@ -163,11 +161,14 @@ class AgcspTS(Solver):
         
         if move == 'insert':
             node, index = move_args
-            new_path = solution.path[:index] + [node] + solution.path[index:]
+            new_path = np.insert(solution.path, index, [node], axis=0)
+            self.tabu_list.append(node)
             return AgcspSolution(new_path)
         elif move == 'remove':
             index, = move_args
-            new_path = solution.path[:index] + solution.path[index+1:]
+            removed_node = solution.path[index]
+            new_path = np.delete(solution.path, index, axis=0)
+            self.tabu_list.append(removed_node)
             return AgcspSolution(new_path)
         else:
             raise ValueError(f"Unknown move type: {move}")
@@ -184,24 +185,32 @@ class AgcspTS(Solver):
         raise NotImplementedError("Best improving move not implemented yet.")
 
     def _neighborhood_move_first_improving(self, solution: AgcspSolution) -> AgcspSolution:
-        # Evaluating insertions
-        cl = [node for node in self.instance.grid_nodes if node not in solution.path]
-        for node in cl:
-            if node in self.tabu_list:
-                continue
-            
-            path_indexes = random.sample(range(len(solution.path) + 1), len(solution.path) + 1)
-            for index in path_indexes:
-                delta = self.evaluator.evaluate_insertion_delta(solution, node, index)
-                if delta < 0:
-                    return self._apply_move(solution, ('insert', node, index))
+        # Randomly decide which operator to try first
+        operators = ['insert', 'remove']
+        random.shuffle(operators)
         
-        # Evaluating removals
-        for index in range(len(solution.path)):
-            if solution.path[index] in self.tabu_list:
-                continue
+        for operator in operators:
+            if operator == 'insert':
+                # Evaluating insertions
+                cl = [node for node in self.instance.grid_nodes if node not in solution.path]
+                for node in cl:
+                    if any(np.array_equal(node, tabu_node) for tabu_node in self.tabu_list if tabu_node is not None):
+                        continue
+                    
+                    path_indexes = random.sample(range(len(solution.path) + 1), len(solution.path) + 1)
+                    for index in path_indexes:
+                        delta = self.evaluator.evaluate_insertion_delta(solution, node, index)
+                        if delta < 0:
+                            return self._apply_move(solution, 'insert', (node, index))
+            
+            elif operator == 'remove':
+                # Evaluating removals
+                for index in range(len(solution.path)):
+                    if any(np.array_equal(solution.path[index], tabu_node) for tabu_node in self.tabu_list if tabu_node is not None):
+                        continue
 
-            delta = self.evaluator.evaluate_removal_delta(solution, index)
-            if delta < 0:
-                return self._apply_move(solution, ('remove', index))
+                    delta = self.evaluator.evaluate_removal_delta(solution, index)
+                    if delta < 0:
+                        return self._apply_move(solution, 'remove', (index,))
+        
         return solution

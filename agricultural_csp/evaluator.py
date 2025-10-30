@@ -9,7 +9,7 @@ class AgcspEvaluator:
     
     def __init__(self, instance: AgcspInstance):
         self.instance = instance
-        self.alpha = 1.0  # Weight for coverage proportion
+        self.alpha = 10 * self.instance.node_count  # Weight for coverage proportion
         self.beta = 1.0   # Weight for travelled distance
         self.gamma = 1.0  # Weight for maneuver complexity penalty
     
@@ -168,6 +168,14 @@ class AgcspEvaluator:
         if node_idx < 0 or node_idx >= len(path):
             raise ValueError("Node index for removal is out of bounds.")
 
+        # Check if removal creates a path segment that hits an obstacle
+        if len(path) > 2 and 0 < node_idx < len(path) - 1:
+            p_prev = path[node_idx - 1]
+            p_next = path[node_idx + 1]
+            # If the new direct segment would hit an obstacle, don't allow this removal
+            if not self.is_path_segment_valid(p_prev, p_next):
+                return float('inf')  # Return infinite cost to prevent this move
+
         old_cost = self.objfun(solution)
         old_distance = solution.cache.get("path_length", 0.0)
         old_mcp = solution.cache.get("manouver_complexity_penalty", 0.0)
@@ -281,13 +289,26 @@ class AgcspEvaluator:
         """ Calculates the delta in the objective function when inserting a new node. """
         if position < 0 or position > len(solution.path):
             raise ValueError("Insertion position is out of bounds.")
-            
+        
+        path = np.array(solution.path)
+        node_to_insert = np.array(node_to_insert)
+        
+        # Check if insertion creates path segments that hit obstacles
+        if position > 0:
+            p_prev = path[position - 1]
+            # Check segment from previous node to inserted node
+            if not self.is_path_segment_valid(p_prev, node_to_insert):
+                return float('inf')
+        
+        if position < len(path):
+            p_next = path[position]
+            # Check segment from inserted node to next node
+            if not self.is_path_segment_valid(node_to_insert, p_next):
+                return float('inf')
+        
         old_cost = self.objfun(solution)
         old_distance = solution.cache.get("path_length", 0.0)
         old_mcp = solution.cache.get("manouver_complexity_penalty", 0.0)
-
-        path = np.array(solution.path)
-        node_to_insert = np.array(node_to_insert)
 
         delta_distance = 0.0
         if len(path) == 0:
@@ -306,10 +327,10 @@ class AgcspEvaluator:
         delta_mcp = 0.0
         if position > 0 and position < len(path):
             delta_mcp += self._calculate_angle_penalty_at_node(path[position-1], node_to_insert, path[position])
-        if position > 1:
+        if position > 1 and position < len(path):
             delta_mcp -= self._calculate_angle_penalty_at_node(path[position-2], path[position-1], path[position])
             delta_mcp += self._calculate_angle_penalty_at_node(path[position-2], path[position-1], node_to_insert)
-        if position < len(path) - 1:
+        if position > 0 and position < len(path) - 1:
             delta_mcp -= self._calculate_angle_penalty_at_node(path[position-1], path[position], path[position+1])
             delta_mcp += self._calculate_angle_penalty_at_node(node_to_insert, path[position], path[position+1])
         new_mcp = old_mcp + delta_mcp
@@ -319,7 +340,7 @@ class AgcspEvaluator:
         new_coverage = self.coverage_proportion(temp_solution)
         
         new_cost = (self.alpha * (1 - new_coverage) + self.beta * new_distance + self.gamma * new_mcp)
-                    
+                
         return new_cost - old_cost
 
 
