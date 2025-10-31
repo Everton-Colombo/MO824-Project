@@ -161,12 +161,17 @@ class AgcspTS(Solver):
         
         if move == 'insert':
             node, index = move_args
-            new_path = np.insert(solution.path, index, [node], axis=0)
-            self.tabu_list.append(node)
+            node_tuple = tuple(node)
+            node_array = np.array(node_tuple, dtype=solution.path.dtype if solution.path.size else float)
+            if solution.path.size == 0:
+                new_path = node_array.reshape(1, -1)
+            else:
+                new_path = np.insert(solution.path, index, node_array, axis=0)
+            self.tabu_list.append(node_tuple)
             return AgcspSolution(new_path)
         elif move == 'remove':
             index, = move_args
-            removed_node = solution.path[index]
+            removed_node = tuple(solution.path[index])
             new_path = np.delete(solution.path, index, axis=0)
             self.tabu_list.append(removed_node)
             return AgcspSolution(new_path)
@@ -189,15 +194,22 @@ class AgcspTS(Solver):
         operators = ['insert', 'remove']
         random.shuffle(operators)
         
+        tabu_nodes = {tuple(np.array(node)) for node in self.tabu_list if node is not None}
+        current_nodes = {tuple(np.array(point)) for point in solution.path}
+        
         for operator in operators:
             if operator == 'insert':
                 # Evaluating insertions
-                cl = [node for node in self.instance.grid_nodes if node not in solution.path]
-                for node in cl:
-                    if any(np.array_equal(node, tabu_node) for tabu_node in self.tabu_list if tabu_node is not None):
+                candidate_nodes = [tuple(np.array(node)) for node in self.instance.grid_nodes]
+                candidate_nodes = [node for node in candidate_nodes if node not in current_nodes]
+                random.shuffle(candidate_nodes)
+                
+                for node in candidate_nodes:
+                    if node in tabu_nodes:
                         continue
                     
-                    path_indexes = random.sample(range(len(solution.path) + 1), len(solution.path) + 1)
+                    path_indexes = list(range(len(solution.path) + 1))
+                    random.shuffle(path_indexes)
                     for index in path_indexes:
                         delta = self.evaluator.evaluate_insertion_delta(solution, node, index)
                         if delta < 0:
@@ -206,9 +218,10 @@ class AgcspTS(Solver):
             elif operator == 'remove':
                 # Evaluating removals
                 for index in range(len(solution.path)):
-                    if any(np.array_equal(solution.path[index], tabu_node) for tabu_node in self.tabu_list if tabu_node is not None):
+                    node_tuple = tuple(solution.path[index])
+                    if node_tuple in tabu_nodes:
                         continue
-
+                    
                     delta = self.evaluator.evaluate_removal_delta(solution, index)
                     if delta < 0:
                         return self._apply_move(solution, 'remove', (index,))

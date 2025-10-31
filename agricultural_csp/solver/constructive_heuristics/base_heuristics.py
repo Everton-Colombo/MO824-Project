@@ -219,7 +219,7 @@ class BoustrophedonSegmentedHeuristic(BaseConstructiveHeuristic):
                     for point in endpoints:
                         dist = np.linalg.norm(np.array(last_point) - point)
                         if dist < min_dist:
-                            if self.evaluator.is_path_segment_valid(last_point, tuple(point)):
+                            if self.evaluator._path_segment_hits_obstacle(last_point, tuple(point)):
                                 min_dist = dist
                                 best_entry_point = tuple(point)
                                 target_segment = segment
