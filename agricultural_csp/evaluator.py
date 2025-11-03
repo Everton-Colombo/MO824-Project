@@ -2,14 +2,14 @@ from scipy.ndimage import distance_transform_edt
 from skimage.draw import line
 import numpy as np
 
-from instance import *
-from solution import *
+from .instance import *
+from .solution import *
 
 class AgcspEvaluator:
     
     def __init__(self, instance: AgcspInstance):
         self.instance = instance
-        self.alpha = 1.0  # Weight for coverage proportion
+        self.alpha = self.instance.node_count  # Weight for coverage proportion
         self.beta = 1.0   # Weight for travelled distance
         self.gamma = 1.0  # Weight for maneuver complexity penalty
     
@@ -37,7 +37,7 @@ class AgcspEvaluator:
         Calculates the maneuver complexity penalty based on the angles between consecutive path segments.
         The penalty is higher for sharper turns (larger angles).
         
-        Formula: P_M(S) = sum(1 + cos(theta_i)) for i from 2 to k-1
+        Formula: P_M(S) = sum(1 - cos(theta_i)) for i from 2 to k-1
         where theta_i is the angle at point i between segments (i-1, i) and (i, i+1)
         """
         if len(solution.path) < 3:
@@ -49,16 +49,7 @@ class AgcspEvaluator:
             p_curr = np.array(solution.path[i])
             p_next = np.array(solution.path[i + 1])
             
-            # Calculate vectors
-            v1 = p_curr - p_prev
-            v2 = p_next - p_curr
-            
-            # Calculate norms
-            norm_v1 = np.linalg.norm(v1)
-            norm_v2 = np.linalg.norm(v2)
-            
-            cos_theta = np.dot(v1, v2) / (norm_v1 * norm_v2)
-            penalty += 1 - cos_theta
+            penalty += self._calculate_angle_penalty_at_node(p_prev, p_curr, p_next)
             
         return penalty
 
@@ -68,13 +59,25 @@ class AgcspEvaluator:
         Efficiently calculates the proportion of covered nodes.
         Also sets a flag in the solution if any obstacle is hit.
         """
+        
+        if len(solution.path) == 0:
+            solution.cache['hits_obstacle'] = False
+            return 0.0
 
-        final_coverage_mask = self._get_coverage_mask(solution.path)
+        final_coverage_mask = self._coverage_mask(solution)
         solution.cache['hits_obstacle'] = np.any(final_coverage_mask & self.instance.obstacle_mask)
         
         num_covered_nodes = np.sum(final_coverage_mask)
-        return num_covered_nodes / self.instance.node_count
+        return num_covered_nodes / len(self.instance.field_nodes)
     
+    @cache_on_solution
+    def hits_obstacle(self, solution: AgcspSolution) -> bool:
+        if len(solution.path) == 0:
+            return False
+                
+        final_coverage_mask = self._coverage_mask(solution)
+        return np.any(final_coverage_mask & self.instance.obstacle_mask)
+
     def get_covered_nodes_list(self, path_points: List[Node]) -> np.ndarray:
         """
         Calculates the covered nodes for a given path.
@@ -82,20 +85,27 @@ class AgcspEvaluator:
         For the optimization process, use calculate_coverage_proportion instead.
         """
 
-        final_coverage_mask = self._get_coverage_mask(path_points)
+        coverage_mask_area = self._coverage_mask(path_points)
+        covered_target_nodes_mask = coverage_mask_area & self.instance.target_mask
+        covered_indices_shifted = np.argwhere(covered_target_nodes_mask)
+        covered_nodes_coords = covered_indices_shifted + self.instance.min_coords
 
-        # Convert covered indices back to the original coordinate system
-        covered_indices_shifted = np.argwhere(final_coverage_mask)
-        covered_nodes = covered_indices_shifted + self.instance.min_coords
+        return covered_nodes_coords
 
-        return covered_nodes
-
-    def _get_coverage_mask(self, path_points: List[Node]) -> np.ndarray:
+    @cache_on_solution
+    def _coverage_mask(self, solution: AgcspSolution | List[Node]) -> np.ndarray:
         """
         Calculates the coverage mask for a given path.
         This is done using a distance transform approach, which requires a rectangular grid.
         """
-        path_arr = np.array(path_points)
+        if isinstance(solution, AgcspSolution):
+            path_arr = np.array(solution.path, dtype=int)
+        else:
+            path_arr = np.array(solution, dtype=int)
+
+        if path_arr.size == 0:
+            return np.zeros(self.instance.bounding_box_shape, dtype=bool)
+
         shifted_path = path_arr - self.instance.min_coords
 
         rectangular_coverage = self._get_rectangular_coverage(
@@ -124,12 +134,47 @@ class AgcspEvaluator:
         return distances <= (sprayer_length / 2.0)
     #endregion
 
+    #region Path Validation    
+    def _path_segment_hits_obstacle(self, p_start: Node, p_end: Node) -> bool:
+        """
+        Checks if the path segment between p_start and p_end collides with any obstacles, considering the width of the sprayer.
+        """
+
+        if np.array_equal(p_start, p_end):
+            return True
+
+        segment_path = np.array([p_start, p_end], dtype=int)
+        shifted_segment = segment_path - self.instance.min_coords
+
+        segment_coverage_mask = self._get_rectangular_coverage(
+            self.instance.bounding_box_shape,
+            shifted_segment,
+            self.instance.sprayer_length
+        )
+
+        collision_mask = segment_coverage_mask & self.instance.obstacle_mask
+        
+        if np.any(collision_mask):
+            return False
+
+        return True
+    
+    #endregion
+
     #region Delta Evaluation Methods
     def evaluate_removal_delta(self, solution: AgcspSolution, node_idx: int) -> float:
         """ Calculates the delta when removing one node. """
         path = np.array(solution.path)
         if node_idx < 0 or node_idx >= len(path):
             raise ValueError("Node index for removal is out of bounds.")
+
+        # Check if removal creates a path segment that hits an obstacle
+        if len(path) > 2 and 0 < node_idx < len(path) - 1:
+            p_prev = path[node_idx - 1]
+            p_next = path[node_idx + 1]
+            # If the new direct segment would hit an obstacle, don't allow this removal
+            if not self._path_segment_hits_obstacle(p_prev, p_next):
+                return float('inf')  # Return infinite cost to prevent this move
 
         old_cost = self.objfun(solution)
         old_distance = solution.cache.get("path_length", 0.0)
@@ -149,17 +194,25 @@ class AgcspEvaluator:
             delta_distance = dist_added - dist_removed
         new_distance = old_distance + delta_distance
 
+        max_angle_penalty = 1 - np.cos(np.radians(self.instance.max_turn_angle))
+
         delta_mcp = 0.0
         if node_idx > 0 and node_idx < len(path) - 1:
             delta_mcp -= self._calculate_angle_penalty_at_node(path[node_idx-1], path[node_idx], path[node_idx+1])
         if node_idx > 1:
             delta_mcp -= self._calculate_angle_penalty_at_node(path[node_idx-2], path[node_idx-1], path[node_idx])
             if node_idx < len(path) - 1:
-                delta_mcp += self._calculate_angle_penalty_at_node(path[node_idx-2], path[node_idx-1], path[node_idx+1])
+                new_angle_prev = self._calculate_angle_penalty_at_node(path[node_idx-2], path[node_idx-1], path[node_idx+1])
+                if new_angle_prev > max_angle_penalty:
+                    return float('inf')
+                delta_mcp += new_angle_prev
         if node_idx < len(path) - 2:
             delta_mcp -= self._calculate_angle_penalty_at_node(path[node_idx], path[node_idx+1], path[node_idx+2])
             if node_idx > 0:
-                delta_mcp += self._calculate_angle_penalty_at_node(path[node_idx-1], path[node_idx+1], path[node_idx+2])
+                new_angle_next = self._calculate_angle_penalty_at_node(path[node_idx-1], path[node_idx+1], path[node_idx+2])
+                if new_angle_next > max_angle_penalty:
+                    return float('inf')
+                delta_mcp += new_angle_next
         new_mcp = old_mcp + delta_mcp
         
         new_path_for_coverage = np.delete(path, node_idx, axis=0)
@@ -244,13 +297,26 @@ class AgcspEvaluator:
         """ Calculates the delta in the objective function when inserting a new node. """
         if position < 0 or position > len(solution.path):
             raise ValueError("Insertion position is out of bounds.")
-            
+        
+        path = np.array(solution.path)
+        node_to_insert = np.array(node_to_insert)
+        
+        # Check if insertion creates path segments that hit obstacles
+        if position > 0:
+            p_prev = path[position - 1]
+            # Check segment from previous node to inserted node
+            if not self._path_segment_hits_obstacle(p_prev, node_to_insert):
+                return float('inf')
+        
+        if position < len(path):
+            p_next = path[position]
+            # Check segment from inserted node to next node
+            if not self._path_segment_hits_obstacle(node_to_insert, p_next):
+                return float('inf')
+        
         old_cost = self.objfun(solution)
         old_distance = solution.cache.get("path_length", 0.0)
         old_mcp = solution.cache.get("manouver_complexity_penalty", 0.0)
-
-        path = np.array(solution.path)
-        node_to_insert = np.array(node_to_insert)
 
         delta_distance = 0.0
         if len(path) == 0:
@@ -261,28 +327,51 @@ class AgcspEvaluator:
             delta_distance = np.linalg.norm(path[-1] - node_to_insert)
         else:
             p_prev, p_next = path[position - 1], path[position]
-            delta_distance = (np.linalg.norm(p_prev - node_to_insert) + 
-                              np.linalg.norm(node_to_insert - p_next) - 
-                              np.linalg.norm(p_prev - p_next))
+            delta_distance = (
+                np.linalg.norm(p_prev - node_to_insert)
+                + np.linalg.norm(node_to_insert - p_next)
+                - np.linalg.norm(p_prev - p_next)
+            )
         new_distance = old_distance + delta_distance
 
-        delta_mcp = 0.0
-        if position > 0 and position < len(path):
-            delta_mcp += self._calculate_angle_penalty_at_node(path[position-1], node_to_insert, path[position])
-        if position > 1:
-            delta_mcp -= self._calculate_angle_penalty_at_node(path[position-2], path[position-1], path[position])
-            delta_mcp += self._calculate_angle_penalty_at_node(path[position-2], path[position-1], node_to_insert)
-        if position < len(path) - 1:
-            delta_mcp -= self._calculate_angle_penalty_at_node(path[position-1], path[position], path[position+1])
-            delta_mcp += self._calculate_angle_penalty_at_node(node_to_insert, path[position], path[position+1])
-        new_mcp = old_mcp + delta_mcp
+        max_angle_penalty = 1 - np.cos(np.radians(self.instance.max_turn_angle))
 
         new_path = np.insert(path, position, node_to_insert, axis=0)
+
+        old_local_mcp = 0.0
+        if len(path) >= 3:
+            if 1 <= position - 1 <= len(path) - 2:
+                old_local_mcp += self._calculate_angle_penalty_at_node(
+                    path[position - 2], path[position - 1], path[position]
+                )
+            if 1 <= position <= len(path) - 2:
+                old_local_mcp += self._calculate_angle_penalty_at_node(
+                    path[position - 1], path[position], path[position + 1]
+                )
+
+        new_local_mcp = 0.0
+        if len(new_path) >= 3:
+            for idx in (position - 1, position, position + 1):
+                if 1 <= idx <= len(new_path) - 2:
+                    angle_penalty = self._calculate_angle_penalty_at_node(
+                        new_path[idx - 1], new_path[idx], new_path[idx + 1]
+                    )
+                    if angle_penalty > max_angle_penalty:
+                        return float('inf')
+                    new_local_mcp += angle_penalty
+
+        delta_mcp = new_local_mcp - old_local_mcp
+        new_mcp = old_mcp + delta_mcp
+
         temp_solution = AgcspSolution(new_path)
         new_coverage = self.coverage_proportion(temp_solution)
-        
-        new_cost = (self.alpha * (1 - new_coverage) + self.beta * new_distance + self.gamma * new_mcp)
-                    
+
+        new_cost = (
+            self.alpha * (1 - new_coverage)
+            + self.beta * new_distance
+            + self.gamma * new_mcp
+        )
+
         return new_cost - old_cost
 
 
@@ -315,3 +404,17 @@ class AgcspEvaluator:
                     
         return new_cost - old_cost
     #endregion
+    
+    def is_feasible(self, solution: AgcspSolution) -> bool:
+        """ Checks if the solution is feasible (i.e., does not hit any obstacles). """
+        
+        # verify that no angle is too sharp (no turn sharper than max_turn_angle)
+        for i in range(1, len(solution.path) - 1):
+            p_prev = np.array(solution.path[i - 1])
+            p_curr = np.array(solution.path[i])
+            p_next = np.array(solution.path[i + 1])
+            
+            if self._calculate_angle_penalty_at_node(p_prev, p_curr, p_next) > (1 - np.cos(np.radians(self.instance.max_turn_angle))):
+                return False
+
+        return not self.hits_obstacle(solution) and self.coverage_proportion(solution) >= 0.98

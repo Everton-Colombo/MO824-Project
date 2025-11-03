@@ -6,7 +6,7 @@ Node = Tuple[float, float]
 
 class AgcspSolution:
     def __init__(self, path: List[Node]):
-        self.path = np.array(path)
+        self.path = np.array(path, dtype=float)
         
         self._cache = {'__hash': hash(self.path.tobytes())}
         
