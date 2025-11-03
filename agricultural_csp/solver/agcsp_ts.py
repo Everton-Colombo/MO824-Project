@@ -12,37 +12,6 @@ import random
 
 from .constructive_heuristics.base_heuristics import *
 
-class RestartIntensificationComponent():
-    def __init__(self, instance: AgcspInstance = None, restart_patience: int = 100, max_fixed_elements: int = 3):
-        pass
-        # self._instance = instance
-        
-        # self.recency_memory: List[int] = None
-        # self.restart_patience = restart_patience
-        # self.max_fixed_elements = max_fixed_elements
-
-    # def set_instance(self, instance: AgcspInstance):
-    #     self._instance = instance
-    #     self.recency_memory = [0] * instance.n
-
-    def update_recency_memory(self, best_solution: AgcspSolution):
-        pass
-        # elements_in_solution = set(best_solution.elements)
-        # elements_not_in_solution = set(range(self._instance.n)) - elements_in_solution
-        
-        # for element in elements_in_solution:
-        #     self.recency_memory[element] += 1
-                
-        # for element in elements_not_in_solution:
-        #     self.recency_memory[element] = 0
-        
-    def get_attractive_elements(self) -> List[int]:
-        pass
-        # # return a list of the most recurring elements (up to max_fixed_elements) that dont have a zero value in recency_memory
-        
-        # sorted_elements = sorted(range(self._instance.n), key=lambda x: self.recency_memory[x], reverse=True)
-        # return [element for element in sorted_elements if self.recency_memory[element] > 0][:self.max_fixed_elements]
-
 
 @dataclass
 class TSStrategy():
@@ -55,7 +24,6 @@ class TSStrategy():
     search_strategy: Literal['first', 'best'] = 'first'
     probabilistic_ts: bool = False
     probabilistic_param: float = 0.8
-    ibr_component: RestartIntensificationComponent = None
     
     def __post_init__(self):
         if self.probabilistic_ts and not (0 < self.probabilistic_param < 1):
@@ -75,12 +43,6 @@ class AgcspTS(Solver):
         self.strategy = strategy
         self.tabu_list = deque([None] * tenure, maxlen=tenure)
         
-        
-        # # Initialize IBR component if present
-        # if self.strategy.ibr_component is not None:
-        #     self._fixed_elements: List[int] = []
-        #     self.strategy.ibr_component.set_instance(instance)
-        
         # For debug history tracking
         if debug_options.log_history:
             self.history: List[tuple] = []
@@ -95,25 +57,12 @@ class AgcspTS(Solver):
         
         while not self._check_termination():
             self._perform_debug_actions()
-            
-            # # Check for restart with intensification
-            # if (self.strategy.ibr_component is not None and 
-            #     (self._iters_wo_improvement + 1) % self.strategy.ibr_component.restart_patience == 0):
-            #     self._fixed_elements = self.strategy.ibr_component.get_attractive_elements()
-            #     self._current_solution = ScQbfSolution(self.best_solution.elements.copy())
-                
-            #     if self.debug_options.verbose:
-            #         print(f"Restarting with intensification at iteration {self._iters}. Fixed elements: {self._fixed_elements}.")
-            
+
             # Perform neighborhood move
             self._current_solution = self._neighborhood_move(self._current_solution)
             
             # Update execution state (handles best solution tracking)
             self._update_execution_state()
-            
-            # # Update IBR memory if enabled
-            # if self.strategy.ibr_component is not None:
-            #     self.strategy.ibr_component.update_recency_memory(self.best_solution)
         
         self.execution_time = time.time() - self._start_time
         return self.best_solution
