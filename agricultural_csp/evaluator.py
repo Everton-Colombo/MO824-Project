@@ -22,6 +22,21 @@ class AgcspEvaluator:
 
         return (self.alpha * (1 - coverage_proportion) + self.beta * travelled_distance + self.gamma * manouver_complexity_penalty)
 
+    def objfun_components(self, solution: AgcspSolution) -> tuple[float, float, float]:
+        """
+        Returns the three components of the objective function separately.
+        Returns: (coverage_penalty, distance, maneuver_penalty)
+        """
+        coverage_proportion = self.coverage_proportion(solution)
+        travelled_distance = self.path_length(solution)
+        manouver_complexity_penalty = self.manouver_complexity_penalty(solution)
+        
+        coverage_penalty = self.alpha * (1 - coverage_proportion)
+        distance_penalty = self.beta * travelled_distance
+        maneuver_penalty = self.gamma * manouver_complexity_penalty
+        
+        return (coverage_penalty, distance_penalty, maneuver_penalty)
+
     @cache_on_solution
     def path_length(self, solution: AgcspSolution) -> float:
         dist = 0.0
@@ -162,8 +177,21 @@ class AgcspEvaluator:
     #endregion
 
     #region Delta Evaluation Methods
-    def evaluate_removal_delta(self, solution: AgcspSolution, node_idx: int) -> float:
-        """ Calculates the delta when removing one node. """
+    def evaluate_removal_delta(self, solution: AgcspSolution, node_idx: int, 
+                               return_components: bool = False) -> float | tuple[float, float, float]:
+        """ 
+        Calculates the delta when removing one node.
+        
+        Args:
+            solution: The current solution
+            node_idx: The index of the node to remove
+            return_components: If True, returns (coverage_delta, distance_delta, maneuver_delta)
+                             If False, returns only total_delta (backward compatible)
+        
+        Returns:
+            If return_components=False: float (total delta)
+            If return_components=True: tuple of (coverage_delta, distance_delta, maneuver_delta)
+        """
         path = np.array(solution.path)
         if node_idx < 0 or node_idx >= len(path):
             raise ValueError("Node index for removal is out of bounds.")
@@ -174,12 +202,15 @@ class AgcspEvaluator:
             p_next = path[node_idx + 1]
             # If the new direct segment would hit an obstacle, don't allow this removal
             if not self._path_segment_hits_obstacle(p_prev, p_next):
-                return float('inf')  # Return infinite cost to prevent this move
+                inf_result = float('inf')
+                return (inf_result, inf_result, inf_result) if return_components else inf_result
 
-        old_cost = self.objfun(solution)
+        # Get old values
+        old_coverage_proportion = self.coverage_proportion(solution)
         old_distance = solution.cache.get("path_length", 0.0)
         old_mcp = solution.cache.get("manouver_complexity_penalty", 0.0)
 
+        # Calculate distance delta
         delta_distance = 0.0
         if len(path) <= 1:
             new_distance = 0.0
@@ -196,6 +227,7 @@ class AgcspEvaluator:
 
         max_angle_penalty = 1 - np.cos(np.radians(self.instance.max_turn_angle))
 
+        # Calculate maneuver complexity delta
         delta_mcp = 0.0
         if node_idx > 0 and node_idx < len(path) - 1:
             delta_mcp -= self._calculate_angle_penalty_at_node(path[node_idx-1], path[node_idx], path[node_idx+1])
@@ -204,24 +236,35 @@ class AgcspEvaluator:
             if node_idx < len(path) - 1:
                 new_angle_prev = self._calculate_angle_penalty_at_node(path[node_idx-2], path[node_idx-1], path[node_idx+1])
                 if new_angle_prev > max_angle_penalty:
-                    return float('inf')
+                    inf_result = float('inf')
+                    return (inf_result, inf_result, inf_result) if return_components else inf_result
                 delta_mcp += new_angle_prev
         if node_idx < len(path) - 2:
             delta_mcp -= self._calculate_angle_penalty_at_node(path[node_idx], path[node_idx+1], path[node_idx+2])
             if node_idx > 0:
                 new_angle_next = self._calculate_angle_penalty_at_node(path[node_idx-1], path[node_idx+1], path[node_idx+2])
                 if new_angle_next > max_angle_penalty:
-                    return float('inf')
+                    inf_result = float('inf')
+                    return (inf_result, inf_result, inf_result) if return_components else inf_result
                 delta_mcp += new_angle_next
         new_mcp = old_mcp + delta_mcp
         
+        # Calculate coverage delta
         new_path_for_coverage = np.delete(path, node_idx, axis=0)
         temp_solution = AgcspSolution(new_path_for_coverage)
-        new_coverage = self.coverage_proportion(temp_solution)
+        new_coverage_proportion = self.coverage_proportion(temp_solution)
+        delta_coverage_proportion = new_coverage_proportion - old_coverage_proportion
 
-        new_cost = (self.alpha * (1 - new_coverage) + self.beta * new_distance + self.gamma * new_mcp)
+        # Calculate component deltas (with weights applied)
+        delta_coverage_penalty = self.alpha * (-delta_coverage_proportion)  # Note: objfun uses (1 - coverage)
+        delta_distance_penalty = self.beta * delta_distance
+        delta_maneuver_penalty = self.gamma * delta_mcp
                     
-        return new_cost - old_cost
+        if return_components:
+            return (delta_coverage_penalty, delta_distance_penalty, delta_maneuver_penalty)
+        else:
+            # Total delta
+            return delta_coverage_penalty + delta_distance_penalty + delta_maneuver_penalty
 
     def evaluate_swap_delta(self, solution: AgcspSolution, idx1: int, idx2: int) -> float:
         """ Calculates the delta when swapping two nodes. """
@@ -293,8 +336,22 @@ class AgcspEvaluator:
         return 1 - cos_theta
 
 
-    def evaluate_insertion_delta(self, solution: AgcspSolution, node_to_insert: Node, position: int) -> float:
-        """ Calculates the delta in the objective function when inserting a new node. """
+    def evaluate_insertion_delta(self, solution: AgcspSolution, node_to_insert: Node, position: int, 
+                                  return_components: bool = False) -> float | tuple[float, float, float]:
+        """ 
+        Calculates the delta in the objective function when inserting a new node.
+        
+        Args:
+            solution: The current solution
+            node_to_insert: The node to insert
+            position: The position to insert the node
+            return_components: If True, returns (coverage_delta, distance_delta, maneuver_delta)
+                             If False, returns only total_delta (backward compatible)
+        
+        Returns:
+            If return_components=False: float (total delta)
+            If return_components=True: tuple of (coverage_delta, distance_delta, maneuver_delta)
+        """
         if position < 0 or position > len(solution.path):
             raise ValueError("Insertion position is out of bounds.")
         
@@ -306,18 +363,22 @@ class AgcspEvaluator:
             p_prev = path[position - 1]
             # Check segment from previous node to inserted node
             if not self._path_segment_hits_obstacle(p_prev, node_to_insert):
-                return float('inf')
+                inf_result = float('inf')
+                return (inf_result, inf_result, inf_result) if return_components else inf_result
         
         if position < len(path):
             p_next = path[position]
             # Check segment from inserted node to next node
             if not self._path_segment_hits_obstacle(node_to_insert, p_next):
-                return float('inf')
+                inf_result = float('inf')
+                return (inf_result, inf_result, inf_result) if return_components else inf_result
         
-        old_cost = self.objfun(solution)
+        # Get old values
+        old_coverage_proportion = self.coverage_proportion(solution)
         old_distance = solution.cache.get("path_length", 0.0)
         old_mcp = solution.cache.get("manouver_complexity_penalty", 0.0)
 
+        # Calculate distance delta
         delta_distance = 0.0
         if len(path) == 0:
             pass
@@ -338,6 +399,7 @@ class AgcspEvaluator:
 
         new_path = np.insert(path, position, node_to_insert, axis=0)
 
+        # Calculate maneuver complexity delta
         old_local_mcp = 0.0
         if len(path) >= 3:
             if 1 <= position - 1 <= len(path) - 2:
@@ -357,22 +419,27 @@ class AgcspEvaluator:
                         new_path[idx - 1], new_path[idx], new_path[idx + 1]
                     )
                     if angle_penalty > max_angle_penalty:
-                        return float('inf')
+                        inf_result = float('inf')
+                        return (inf_result, inf_result, inf_result) if return_components else inf_result
                     new_local_mcp += angle_penalty
 
         delta_mcp = new_local_mcp - old_local_mcp
         new_mcp = old_mcp + delta_mcp
 
+        # Calculate coverage delta
         temp_solution = AgcspSolution(new_path)
-        new_coverage = self.coverage_proportion(temp_solution)
+        new_coverage_proportion = self.coverage_proportion(temp_solution)
+        delta_coverage_proportion = new_coverage_proportion - old_coverage_proportion
 
-        new_cost = (
-            self.alpha * (1 - new_coverage)
-            + self.beta * new_distance
-            + self.gamma * new_mcp
-        )
+        # Calculate component deltas (with weights applied)
+        delta_coverage_penalty = self.alpha * (-delta_coverage_proportion)  # Note: objfun uses (1 - coverage)
+        delta_distance_penalty = self.beta * delta_distance
+        delta_maneuver_penalty = self.gamma * delta_mcp
 
-        return new_cost - old_cost
+        if return_components:
+            return (delta_coverage_penalty, delta_distance_penalty, delta_maneuver_penalty)
+        else:
+            return delta_coverage_penalty + delta_distance_penalty + delta_maneuver_penalty
 
 
     def evaluate_2opt_delta(self, solution: AgcspSolution, i: int, j: int) -> float:
