@@ -31,6 +31,7 @@ class TSStrategy():
     probabilistic_param: float = 0.8
     
     tabu_radius: float = 0.0  # Radius around operated nodes to mark as tabu (0 = only the exact node)
+    move_min_distance: int = 5  # Minimum distance for move operator search
 
     phased_optimization: Optional[PhasedOptimizationParams] = PhasedOptimizationParams()
 
@@ -39,6 +40,8 @@ class TSStrategy():
             raise ValueError("Probabilistic parameter must be in the range (0, 1) when probabilistic TS is enabled.")
         if self.tabu_radius < 0:
             raise ValueError("Tabu radius must be non-negative.")
+        if self.move_min_distance < 0:
+            raise ValueError("Move minimum distance must be non-negative.")
 
 
 class AgcspTS(Solver):
@@ -221,6 +224,9 @@ class AgcspTS(Solver):
     def _apply_move(self, solution: AgcspSolution, move: str, move_args: tuple) -> AgcspSolution:
         """Applies a move to the given solution and returns the new solution."""
         
+        if self.debug_options.verbose:
+            print(f"Applying move: {move} with args {move_args}")
+        
         if move == 'insert':
             node, index = move_args
             node_tuple = tuple(node)
@@ -236,6 +242,13 @@ class AgcspTS(Solver):
             removed_node = tuple(solution.path[index])
             new_path = np.delete(solution.path, index, axis=0)
             self._add_to_tabu_list(removed_node)
+            return AgcspSolution(new_path)
+        elif move == 'move':
+            index, new_node = move_args
+            old_node = tuple(solution.path[index])
+            new_path = np.array(solution.path, dtype=solution.path.dtype if solution.path.size else float)
+            new_path[index] = new_node
+            self._add_to_tabu_list(old_node)
             return AgcspSolution(new_path)
         else:
             raise ValueError(f"Unknown move type: {move}")
@@ -303,18 +316,14 @@ class AgcspTS(Solver):
         Returns:
             Improved solution or the same solution if no improvement found
         """
-        # Randomly decide which operator to try first
-        operators = ['insert', 'remove']
+        operators = ['insert', 'remove', 'move']
         random.shuffle(operators)
         
         current_nodes = {tuple(np.array(point)) for point in solution.path}
-        
-        # Get degradation tolerance for this phase
         tolerance = self.strategy.phased_optimization.degradation_tolerances[phase]
         
         for operator in operators:
             if operator == 'insert':
-                # Evaluating insertions
                 candidate_nodes = [tuple(np.array(node)) for node in self.instance.grid_nodes]
                 candidate_nodes = [node for node in candidate_nodes if node not in current_nodes]
                 random.shuffle(candidate_nodes)
@@ -326,17 +335,15 @@ class AgcspTS(Solver):
                     path_indexes = list(range(len(solution.path) + 1))
                     random.shuffle(path_indexes)
                     for index in path_indexes:
-                        # Get component deltas
                         result = self.evaluator.evaluate_insertion_delta(
                             solution, node, index, return_components=True
                         )
                         
-                        if result[0] == float('inf'):  # Invalid move
+                        if result[0] == float('inf'):
                             continue
                         
                         cov_delta, dist_delta, man_delta = result
                         
-                        # Check if move is acceptable for current phase
                         if self._is_move_acceptable_for_phase(
                             phase, cov_delta, dist_delta, man_delta, 
                             best_components, tolerance
@@ -344,7 +351,6 @@ class AgcspTS(Solver):
                             return self._apply_move(solution, 'insert', (node, index))
             
             elif operator == 'remove':
-                # Evaluating removals
                 remove_indices = list(range(len(solution.path)))
                 random.shuffle(remove_indices)
                 
@@ -353,22 +359,51 @@ class AgcspTS(Solver):
                     if self._is_node_tabu(node_tuple):
                         continue
                     
-                    # Get component deltas
                     result = self.evaluator.evaluate_removal_delta(
                         solution, index, return_components=True
                     )
                     
-                    if result[0] == float('inf'):  # Invalid move
+                    if result[0] == float('inf'):
                         continue
                     
                     cov_delta, dist_delta, man_delta = result
                     
-                    # Check if move is acceptable for current phase
                     if self._is_move_acceptable_for_phase(
                         phase, cov_delta, dist_delta, man_delta,
                         best_components, tolerance
                     ):
                         return self._apply_move(solution, 'remove', (index,))
+            
+            elif operator == 'move':
+                move_indices = list(range(len(solution.path)))
+                random.shuffle(move_indices)
+                
+                directions = ['up', 'down', 'left', 'right']
+                
+                for index in move_indices:
+                    node_tuple = tuple(solution.path[index])
+                    if self._is_node_tabu(node_tuple):
+                        continue
+                    
+                    random.shuffle(directions)
+                    for direction in directions:
+                        result = self.evaluator.evaluate_move_delta(
+                            solution, index, self.strategy.move_min_distance, direction, return_components=True
+                        )
+                        
+                        if result is None or result[0] == float('inf'):
+                            continue
+                        
+                        cov_delta, dist_delta, man_delta = result
+                        
+                        if self._is_move_acceptable_for_phase(
+                            phase, cov_delta, dist_delta, man_delta,
+                            best_components, tolerance
+                        ):
+                            new_node = self.evaluator._find_node_in_direction(
+                                np.array(solution.path[index]), self.strategy.move_min_distance, direction
+                            )
+                            return self._apply_move(solution, 'move', (index, new_node))
         
         return solution
     
