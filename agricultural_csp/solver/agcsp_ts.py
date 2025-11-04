@@ -29,12 +29,16 @@ class TSStrategy():
     search_strategy: Literal['first', 'best'] = 'first'
     probabilistic_ts: bool = False
     probabilistic_param: float = 0.8
+    
+    tabu_radius: float = 0.0  # Radius around operated nodes to mark as tabu (0 = only the exact node)
 
     phased_optimization: Optional[PhasedOptimizationParams] = PhasedOptimizationParams()
 
     def __post_init__(self):
         if self.probabilistic_ts and not (0 < self.probabilistic_param < 1):
             raise ValueError("Probabilistic parameter must be in the range (0, 1) when probabilistic TS is enabled.")
+        if self.tabu_radius < 0:
+            raise ValueError("Tabu radius must be non-negative.")
 
 
 class AgcspTS(Solver):
@@ -151,6 +155,67 @@ class AgcspTS(Solver):
         """
         self._constructive_builder = self._get_heuristic_builder(self.instance, self.evaluator, strategy_construct_heuristic)
         return self._constructive_builder.generate_initial_solution()
+    
+    def _add_to_tabu_list(self, node: tuple | np.ndarray):
+        """
+        Adds a node (and nearby nodes if tabu_radius > 0) to the tabu list.
+        
+        Args:
+            node: The node to add to tabu list (as tuple or numpy array)
+        """
+        # Convert to tuple for consistent comparison
+        if isinstance(node, np.ndarray):
+            node = tuple(node)
+        
+        if self.strategy.tabu_radius <= 0:
+            # Only add the exact node
+            self.tabu_list.append(node)
+        else:
+            # Add node and all nodes within tabu_radius
+            node_array = np.array(node)
+            nodes_to_add = [node]  # Start with the operated node
+            
+            # Find all nodes within tabu_radius
+            for grid_node in self.instance.grid_nodes:
+                grid_node_tuple = tuple(grid_node)
+                if grid_node_tuple == node:
+                    continue  # Already added
+                
+                distance = np.linalg.norm(grid_node - node_array)
+                if distance <= self.strategy.tabu_radius:
+                    nodes_to_add.append(grid_node_tuple)
+            
+            # Add all nodes at once (they will be expired together based on tenure)
+            # We add them as a set to keep track of nodes that should be tabu together
+            self.tabu_list.append(frozenset(nodes_to_add))
+    
+    def _is_node_tabu(self, node: tuple | np.ndarray) -> bool:
+        """
+        Checks if a node is in the tabu list.
+        Handles both individual nodes and sets of nodes (when tabu_radius > 0).
+        
+        Args:
+            node: The node to check (as tuple or numpy array)
+            
+        Returns:
+            True if the node is tabu, False otherwise
+        """
+        # Convert to tuple for consistent comparison
+        if isinstance(node, np.ndarray):
+            node = tuple(node)
+        
+        for tabu_entry in self.tabu_list:
+            if tabu_entry is None:
+                continue
+            
+            # Handle both single nodes (tuples) and sets of nodes (frozensets)
+            if isinstance(tabu_entry, frozenset):
+                if node in tabu_entry:
+                    return True
+            elif tabu_entry == node:
+                return True
+        
+        return False
         
 
     def _apply_move(self, solution: AgcspSolution, move: str, move_args: tuple) -> AgcspSolution:
@@ -164,13 +229,13 @@ class AgcspTS(Solver):
                 new_path = node_array.reshape(1, -1)
             else:
                 new_path = np.insert(solution.path, index, node_array, axis=0)
-            self.tabu_list.append(node_tuple)
+            self._add_to_tabu_list(node_tuple)
             return AgcspSolution(new_path)
         elif move == 'remove':
             index, = move_args
             removed_node = tuple(solution.path[index])
             new_path = np.delete(solution.path, index, axis=0)
-            self.tabu_list.append(removed_node)
+            self._add_to_tabu_list(removed_node)
             return AgcspSolution(new_path)
         else:
             raise ValueError(f"Unknown move type: {move}")
@@ -191,7 +256,6 @@ class AgcspTS(Solver):
         operators = ['insert', 'remove']
         random.shuffle(operators)
         
-        tabu_nodes = {tuple(np.array(node)) for node in self.tabu_list if node is not None}
         current_nodes = {tuple(np.array(point)) for point in solution.path}
         
         for operator in operators:
@@ -202,7 +266,7 @@ class AgcspTS(Solver):
                 random.shuffle(candidate_nodes)
                 
                 for node in candidate_nodes:
-                    if node in tabu_nodes:
+                    if self._is_node_tabu(node):
                         continue
                     
                     path_indexes = list(range(len(solution.path) + 1))
@@ -216,7 +280,7 @@ class AgcspTS(Solver):
                 # Evaluating removals
                 for index in range(len(solution.path)):
                     node_tuple = tuple(solution.path[index])
-                    if node_tuple in tabu_nodes:
+                    if self._is_node_tabu(node_tuple):
                         continue
                     
                     delta = self.evaluator.evaluate_removal_delta(solution, index)
@@ -243,7 +307,6 @@ class AgcspTS(Solver):
         operators = ['insert', 'remove']
         random.shuffle(operators)
         
-        tabu_nodes = {tuple(np.array(node)) for node in self.tabu_list if node is not None}
         current_nodes = {tuple(np.array(point)) for point in solution.path}
         
         # Get degradation tolerance for this phase
@@ -257,7 +320,7 @@ class AgcspTS(Solver):
                 random.shuffle(candidate_nodes)
                 
                 for node in candidate_nodes:
-                    if node in tabu_nodes:
+                    if self._is_node_tabu(node):
                         continue
                     
                     path_indexes = list(range(len(solution.path) + 1))
@@ -287,7 +350,7 @@ class AgcspTS(Solver):
                 
                 for index in remove_indices:
                     node_tuple = tuple(solution.path[index])
-                    if node_tuple in tabu_nodes:
+                    if self._is_node_tabu(node_tuple):
                         continue
                     
                     # Get component deltas
