@@ -7,7 +7,7 @@ Node = Tuple[float, float]
 
 class AgcspInstance:
 
-    def __init__(self, grid_nodes: List[Node], obstacle_nodes: List[Node], sprayer_length: float, max_turn_angle: float):
+    def __init__(self, grid_nodes: List[Node], obstacle_nodes: List[Node], sprayer_length: float, max_turn_angle: float, adaptive_sampling: bool = True):
         """
         Initializes the AgcspInstance with grid nodes, obstacle nodes, and sprayer length.
         
@@ -20,7 +20,9 @@ class AgcspInstance:
 
         self.sprayer_length = sprayer_length
         self.max_turn_angle = max_turn_angle
-    
+
+        self.adaptive_sampling = adaptive_sampling
+
         # Convert to sets of tuples for proper comparison. This must be done in case
         # nodes are given as numpy arrays.
         grid_set = set(map(tuple, self.grid_nodes_original))
@@ -41,7 +43,8 @@ class AgcspInstance:
         self._filter_field_nodes()
         self._update_obstacles_with_removed_nodes()
         self._compute_visitable_area_densa_e_kdtree()
-        self._apply_adaptive_sampling()
+        if self.adaptive_sampling:
+            self._apply_adaptive_sampling()
         self._compute_visitable_area_esparsa_e_kdtree()
 
     def _compute_bounding_box_and_masks(self):
