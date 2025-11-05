@@ -7,7 +7,7 @@ from .abc_solver import Solver, TerminationCriteria, DebugOptions
 import time
 from collections import deque
 from typing import Literal, Optional, List
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import random
 
 from .constructive_heuristics.base_heuristics import *
@@ -33,7 +33,9 @@ class TSStrategy():
     tabu_radius: float = 0.0  # Radius around operated nodes to mark as tabu (0 = only the exact node)
     move_min_distance: int = 5  # Minimum distance for move operator search
 
-    phased_optimization: Optional[PhasedOptimizationParams] = PhasedOptimizationParams()
+    phased_optimization: Optional[PhasedOptimizationParams] = field(
+        default_factory=PhasedOptimizationParams
+    )
 
     def __post_init__(self):
         if self.probabilistic_ts and not (0 < self.probabilistic_param < 1):
@@ -68,6 +70,10 @@ class AgcspTS(Solver):
         # Initialize with constructive heuristic
         self.best_solution = self._constructive_heuristic(self.strategy.constructive_heuristic)
         self._current_solution = self.best_solution
+
+        print("-----------------------------------------------------------")
+        print(f"Initial solution objective value: {self.evaluator.objfun(self.best_solution):.2f}")
+        print("-----------------------------------------------------------")
         
         if self.strategy.phased_optimization is not None:
             self._solve_phased()
@@ -250,6 +256,13 @@ class AgcspTS(Solver):
             new_path[index] = new_node
             self._add_to_tabu_list(old_node)
             return AgcspSolution(new_path)
+        elif move == 'swap':
+            idx1, idx2 = move_args
+            new_path = solution.path.copy() 
+            self._add_to_tabu_list(tuple(new_path[idx1]))
+            self._add_to_tabu_list(tuple(new_path[idx2]))
+            new_path[idx1], new_path[idx2] = new_path[idx2].copy(), new_path[idx1].copy()
+            return AgcspSolution(new_path)
         else:
             raise ValueError(f"Unknown move type: {move}")
 
@@ -404,6 +417,39 @@ class AgcspTS(Solver):
                                 np.array(solution.path[index]), self.strategy.move_min_distance, direction
                             )
                             return self._apply_move(solution, 'move', (index, new_node))
+
+            elif operator == 'swap':
+                path_length = len(solution.path)
+                if path_length < 2:
+                    continue
+                
+                all_pairs = [(i, j) for i in range(path_length) for j in range(i + 1, path_length)]
+                random.shuffle(all_pairs)
+
+                max_samples = 2000
+                all_pairs = all_pairs[:max_samples] 
+                
+                for idx1, idx2 in all_pairs:
+                    node1 = tuple(solution.path[idx1])
+                    node2 = tuple(solution.path[idx2])
+
+                    if self._is_node_tabu(node1) or self._is_node_tabu(node2):
+                        continue
+
+                    result = self.evaluator.evaluate_swap_delta(
+                        solution, idx1, idx2, return_components=True
+                    )
+
+                    if result[0] == float('inf'):
+                        continue
+
+                    cov_delta, dist_delta, man_delta = result
+
+                    if self._is_move_acceptable_for_phase(
+                        phase, cov_delta, dist_delta, man_delta,
+                        best_components, tolerance
+                    ):
+                        return self._apply_move(solution, 'swap', (idx1, idx2))
         
         return solution
     

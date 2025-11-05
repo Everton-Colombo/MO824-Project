@@ -59,7 +59,6 @@ class RandomCoverageHeuristic(BaseConstructiveHeuristic):
             uncovered_nodes = uncovered_nodes - covered_nodes_set
             
             current_coverage = self.evaluator.coverage_proportion(solution)
-            print(f"Current coverage: {current_coverage:.4f}, path length: {len(solution.path)}, uncovered: {len(uncovered_nodes)}")
             
             path_set = set(tuple(node) if isinstance(node, (list, np.ndarray)) else node for node in solution.path)
             candidate_nodes = list(uncovered_nodes - path_set)
