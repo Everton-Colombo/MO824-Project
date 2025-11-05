@@ -607,7 +607,146 @@ class AgcspTS(Solver):
         
         return None
 
-   
+    def _neighborhood_move_best_improving_phased(self, solution: AgcspSolution, phase: int, 
+                                            best_components: List[float]) -> AgcspSolution | None:
+    
+        best_total_delta = float('inf')
+        best_focus_delta = 0.0
+        best_move_info = None
+        
+        current_nodes = {tuple(np.array(point)) for point in solution.path}
+        tolerance = self.strategy.phased_optimization.degradation_tolerances[phase]
+        
+        focus_component_idx = phase
+        
+        operators = ['insert', 'remove', 'move', 'swap']
+        
+        for operator in operators:
+
+            if operator == 'insert':
+                candidate_nodes = [tuple(np.array(node)) for node in self.instance.grid_nodes]
+                candidate_nodes = [node for node in candidate_nodes if node not in current_nodes]
+                
+                for node in candidate_nodes:
+                    if self._is_node_tabu(node): continue
+                    
+                    path_indexes = list(range(len(solution.path) + 1))
+                    for index in path_indexes:
+                        result = self.evaluator.evaluate_insertion_delta(solution, node, index, return_components=True)
+                        if result[0] == float('inf'): continue
+                        
+                        cov_delta, dist_delta, man_delta = result
+                        deltas = [cov_delta, dist_delta, man_delta]
+                        
+                        if self._is_move_acceptable_for_phase(phase, cov_delta, dist_delta, man_delta, best_components, tolerance):
+                            focus_delta = deltas[focus_component_idx]
+                            
+                            if focus_delta < best_focus_delta:
+                                best_focus_delta = focus_delta
+                                best_total_delta = sum(deltas)
+                                best_move_info = ('insert', (node, index))
+                            elif focus_delta == best_focus_delta and sum(deltas) < best_total_delta:
+                                best_total_delta = sum(deltas)
+                                best_move_info = ('insert', (node, index))
+                                
+            elif operator == 'remove':
+                for index in range(len(solution.path)):
+                    node_tuple = tuple(solution.path[index])
+                    if self._is_node_tabu(node_tuple): continue
+                    
+                    result = self.evaluator.evaluate_removal_delta(solution, index, return_components=True)
+                    if result[0] == float('inf'): continue
+                    
+                    cov_delta, dist_delta, man_delta = result
+                    deltas = [cov_delta, dist_delta, man_delta]
+                    
+                    if self._is_move_acceptable_for_phase(phase, cov_delta, dist_delta, man_delta, best_components, tolerance):
+                        focus_delta = deltas[focus_component_idx]
+
+                        if focus_delta < best_focus_delta:
+                            best_focus_delta = focus_delta
+                            best_total_delta = sum(deltas)
+                            best_move_info = ('remove', (index,))
+                        elif focus_delta == best_focus_delta and sum(deltas) < best_total_delta:
+                            best_total_delta = sum(deltas)
+                            best_move_info = ('remove', (index,))
+                            
+            elif operator == 'move':
+                
+                move_indices = list(range(len(solution.path)))
+                directions = ['up', 'down', 'left', 'right']
+                min_distance = self.strategy.move_min_distance
+                
+                for index in move_indices:
+                    old_node_tuple = tuple(solution.path[index])
+                    if self._is_node_tabu(old_node_tuple): continue
+                    
+                    for direction in directions:
+                        result = self.evaluator.evaluate_move_delta(
+                            solution, index, min_distance, direction, return_components=True
+                        )
+                        
+                        if result is None or result[0] == float('inf'): continue
+                        
+                        new_node = self.evaluator._find_node_in_direction(solution.path[index], min_distance, direction)
+                        if new_node is None or np.array_equal(new_node, solution.path[index]): continue
+                        
+                        cov_delta, dist_delta, man_delta = result
+                        deltas = [cov_delta, dist_delta, man_delta]
+
+                        if self._is_move_acceptable_for_phase(phase, cov_delta, dist_delta, man_delta, best_components, tolerance):
+                            focus_delta = deltas[focus_component_idx]
+
+                            if focus_delta < best_focus_delta:
+                                best_focus_delta = focus_delta
+                                best_total_delta = sum(deltas)
+                                best_move_info = ('move', (index, new_node))
+                            elif focus_delta == best_focus_delta and sum(deltas) < best_total_delta:
+                                best_total_delta = sum(deltas)
+                                best_move_info = ('move', (index, new_node))
+
+            elif operator == 'swap':
+                path_length = len(solution.path)
+                if path_length < 2: continue
+                
+                all_pairs = [(i, j) for i in range(path_length) for j in range(i + 1, path_length)]
+                random.shuffle(all_pairs)
+                max_samples = 2000 
+                all_pairs = all_pairs[:max_samples] 
+                
+                for idx1, idx2 in all_pairs:
+                    node1 = tuple(solution.path[idx1])
+                    node2 = tuple(solution.path[idx2])
+
+                    if self._is_node_tabu(node1) or self._is_node_tabu(node2): continue
+
+                    result = self.evaluator.evaluate_swap_delta(solution, idx1, idx2, return_components=True)
+                    if result[0] == float('inf'): continue
+
+                    cov_delta, dist_delta, man_delta = result
+                    deltas = [cov_delta, dist_delta, man_delta]
+
+                    if self._is_move_acceptable_for_phase(phase, cov_delta, dist_delta, man_delta, best_components, tolerance):
+                        focus_delta = deltas[focus_component_idx]
+
+                        if focus_delta < best_focus_delta:
+                            best_focus_delta = focus_delta
+                            best_total_delta = sum(deltas)
+                            best_move_info = ('swap', (idx1, idx2))
+                        elif focus_delta == best_focus_delta and sum(deltas) < best_total_delta:
+                            best_total_delta = sum(deltas)
+                            best_move_info = ('swap', (idx1, idx2))
+
+        if best_move_info is not None:
+            operator, move_args = best_move_info
+            
+            if self.debug_options.verbose:
+                print(f"** BEST IMPROVING PHASADO ACEITO ** Tipo: {operator}, Delta Foco ({focus_component_idx}): {best_focus_delta:.4f}")
+                
+            return self._apply_move(solution, operator, move_args)
+        else:
+            return None
+    
     def _is_move_acceptable_for_phase(self, phase: int, cov_delta: float, dist_delta: float, 
                                       man_delta: float, best_components: List[float], 
                                       tolerance: float) -> bool:
