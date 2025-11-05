@@ -696,7 +696,7 @@ class AgcspEvaluator:
         """
         instance = self.instance
     
-        if instance.visitable_kdtree is None:
+        if instance.visitable_kdtree_esparso is None: 
             return None
 
         start_r, start_c = start_node[0], start_node[1]
@@ -712,9 +712,9 @@ class AgcspEvaluator:
             
         target_point = np.array([target_r, target_c])
         
-        distance, index = instance.visitable_kdtree.query(target_point)
+        distance, index = instance.visitable_kdtree_esparso.query(target_point)
         
-        new_node = instance.visitable_nodes_array[index]
+        new_node = instance.visitable_nodes_array_esparso[index]
         
         if np.array_equal(new_node, start_node) and min_distance > 0.1:
             return None
