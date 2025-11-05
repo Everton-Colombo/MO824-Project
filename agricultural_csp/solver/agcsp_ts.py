@@ -101,30 +101,48 @@ class AgcspTS(Solver):
         best_components = list(self.evaluator.objfun_components(self.best_solution))
         
         while not self._check_termination():
-            # Check if we should move to the next phase
+
+            force_phase_change = False
+
             if self._iters - phase_start_iter >= self.strategy.phased_optimization.phase_iterations[current_phase]:
-                # Move to next phase
+                force_phase_change = True
+            
+            self._perform_debug_actions()
+
+            new_solution = None
+        
+            if self.strategy.search_strategy == 'first':
+                new_solution = self._neighborhood_move_first_improving_phased(
+                    self._current_solution, current_phase, best_components
+                )
+            elif self.strategy.search_strategy == 'best':
+                new_solution = self._neighborhood_move_best_improving_phased(
+                    self._current_solution, current_phase, best_components
+                )
+            else:
+                raise ValueError(f"Unknown search strategy: {self.strategy.search_strategy}")
+
+            if new_solution is None:
+                if not force_phase_change and self.debug_options.verbose:
+                    print(f"--- Fase {current_phase + 1} estagnada ({self._iters - phase_start_iter} iterações). Trocando de fase. ---")
+                
+                force_phase_change = True
+                
+            else:
+                self._current_solution = new_solution
+            
+            if force_phase_change and not self._check_termination(): 
                 current_phase += 1
                 phase_start_iter = self._iters
                 
-                # Update best component values for the next phase's constraints
+                if current_phase >= len(self.strategy.phased_optimization.phase_iterations):
+                    current_phase = 0 
+                    
                 best_components = list(self.evaluator.objfun_components(self.best_solution))
                 
-                if current_phase >= len(self.strategy.phased_optimization.phase_iterations):
-                    current_phase = 0  # Restart phases if all completed
-                    
                 if self.debug_options.verbose:
-                    print(f"\n=== Switching to Phase {current_phase + 1} ===")
-                    print(f"Current best components: Cov={best_components[0]:.2f}, Dist={best_components[1]:.2f}, Man={best_components[2]:.2f}")
-            
-            self._perform_debug_actions()
-            
-            # Perform phased neighborhood move
-            self._current_solution = self._neighborhood_move_first_improving_phased(
-                self._current_solution, current_phase, best_components
-            )
-            
-            # Update execution state
+                    print(f"\n=== Trocando para Fase {current_phase + 1} (Objetivo: Otimizar C{current_phase + 1}) ===")
+
             self._update_execution_state()
         
     
@@ -273,9 +291,6 @@ class AgcspTS(Solver):
             return self._neighborhood_move_best_improving(solution)
         else:
             raise ValueError(f"Unknown search strategy: {self.strategy.search_strategy}")
-
-    def _neighborhood_move_best_improving(self, solution: AgcspSolution) -> AgcspSolution:
-        raise NotImplementedError("Best improving move not implemented yet.")
 
     def _neighborhood_move_first_improving(self, solution: AgcspSolution) -> AgcspSolution:
         # Randomly decide which operator to try first
@@ -492,8 +507,9 @@ class AgcspTS(Solver):
                             print(f"  >>> MOVE ACEITO (Swap): Indices ({idx1}, {idx2}). Delta Total: {cov_delta + dist_delta + man_delta:.4f}")
                         return self._apply_move(solution, 'swap', (idx1, idx2))
         
-        return solution
-    
+        return None
+
+   
     def _is_move_acceptable_for_phase(self, phase: int, cov_delta: float, dist_delta: float, 
                                       man_delta: float, best_components: List[float], 
                                       tolerance: float) -> bool:
