@@ -72,7 +72,7 @@ class AgcspTS(Solver):
             self.best_solution = initial_solution
         else:
             print("--- Gerando nova solução inicial... ---")
-            self.best_solution = self.build_initial_solution(self.strategy.constructive_heuristic)
+            self.best_solution = self._constructive_heuristic(self.strategy.constructive_heuristic)
 
         self._current_solution = self.best_solution
 
