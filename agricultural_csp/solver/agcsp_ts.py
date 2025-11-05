@@ -292,6 +292,104 @@ class AgcspTS(Solver):
         else:
             raise ValueError(f"Unknown search strategy: {self.strategy.search_strategy}")
 
+    def _neighborhood_move_best_improving(self, solution: AgcspSolution) -> AgcspSolution:
+        best_delta = 0.0
+        best_move_info = None
+        
+        current_nodes = {tuple(np.array(point)) for point in solution.path}
+        
+        operators = ['insert', 'remove', 'move']
+        
+        for operator in operators:
+            
+            if operator == 'insert':
+                candidate_nodes = [tuple(np.array(node)) for node in self.instance.grid_nodes]
+                candidate_nodes = [node for node in candidate_nodes if node not in current_nodes]
+                
+                for node in candidate_nodes:
+                    if self._is_node_tabu(node):
+                        continue
+                    
+                    path_indexes = list(range(len(solution.path) + 1))
+                    for index in path_indexes:
+                        delta = self.evaluator.evaluate_insertion_delta(solution, node, index)
+                        
+                        if delta < best_delta:
+                            best_delta = delta
+                            best_move_info = ('insert', (node, index))
+                            
+            elif operator == 'remove':
+                for index in range(len(solution.path)):
+                    node_tuple = tuple(solution.path[index])
+                    if self._is_node_tabu(node_tuple):
+                        continue
+                    
+                    delta = self.evaluator.evaluate_removal_delta(solution, index)
+                    
+                    if delta < best_delta:
+                        best_delta = delta
+                        best_move_info = ('remove', (index,))
+
+            elif operator == 'swap':
+                path_length = len(solution.path)
+                if path_length < 2: continue
+                
+                for idx1 in range(path_length):
+                    for idx2 in range(idx1 + 1, path_length):
+                        node1 = tuple(solution.path[idx1])
+                        node2 = tuple(solution.path[idx2])
+
+                        if self._is_node_tabu(node1) or self._is_node_tabu(node2):
+                            continue
+                            
+                        delta = self.evaluator.evaluate_swap_delta(solution, idx1, idx2, return_components=False)
+                        
+                        if delta == float('inf'): continue # Inviável
+                        
+                        if delta < best_delta:
+                            best_delta = delta
+                            best_move_info = ('swap', (idx1, idx2))
+                            
+            elif operator == 'move':
+                move_indices = list(range(len(solution.path)))
+                directions = ['up', 'down', 'left', 'right']
+                min_distance = self.strategy.move_min_distance
+                
+                for index in move_indices:
+                    old_node_tuple = tuple(solution.path[index])
+                    if self._is_node_tabu(old_node_tuple):
+                        continue
+                    
+                    for direction in directions:
+                        new_node = self.evaluator._find_node_in_direction(
+                            solution.path[index], min_distance, direction
+                        )
+                        
+                        if new_node is None or np.array_equal(new_node, solution.path[index]):
+                            continue
+
+                        result = self.evaluator.evaluate_move_delta(
+                            solution, index, min_distance, direction, return_components=True
+                        )
+                        
+                        if result is None or result[0] == float('inf'): continue
+                        
+                        delta = sum(result)
+                        
+                        if delta < best_delta:
+                            best_delta = delta
+                            best_move_info = ('move', (index, new_node))
+                            
+        if best_move_info is not None:
+            operator, move_args = best_move_info
+            
+            if self.debug_options.verbose:
+                print(f"** BEST IMPROVING MOVE ENCONTRADO ** Tipo: {operator}, Delta: {best_delta:.4f}")
+                
+            return self._apply_move(solution, operator, move_args)
+        else:
+            return solution
+
     def _neighborhood_move_first_improving(self, solution: AgcspSolution) -> AgcspSolution:
         # Randomly decide which operator to try first
         operators = ['insert', 'remove', 'move']
