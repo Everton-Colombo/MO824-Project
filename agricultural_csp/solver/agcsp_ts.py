@@ -63,12 +63,17 @@ class AgcspTS(Solver):
         if debug_options.log_history:
             self.history: List[tuple] = []
 
-    def solve(self) -> AgcspSolution:
+    def solve(self, initial_solution: AgcspSolution = None) -> AgcspSolution:
         """Main method to solve the problem using Tabu Search."""
         self._reset_execution_state()
         
-        # Initialize with constructive heuristic
-        self.best_solution = self._constructive_heuristic(self.strategy.constructive_heuristic)
+        if initial_solution:
+            print("--- Iniciando TS com solução fornecida. ---")
+            self.best_solution = initial_solution
+        else:
+            print("--- Gerando nova solução inicial... ---")
+            self.best_solution = self.build_initial_solution(self.strategy.constructive_heuristic)
+
         self._current_solution = self.best_solution
 
         print("-----------------------------------------------------------")
@@ -741,7 +746,7 @@ class AgcspTS(Solver):
             operator, move_args = best_move_info
             
             if self.debug_options.verbose:
-                print(f"** BEST IMPROVING PHASADO ACEITO ** Tipo: {operator}, Delta Foco ({focus_component_idx}): {best_focus_delta:.4f}")
+                print(f"** BEST IMPROVING ACEITO ** Tipo: {operator}, Delta Foco ({focus_component_idx}): {best_focus_delta:.4f}")
                 
             return self._apply_move(solution, operator, move_args)
         else:
