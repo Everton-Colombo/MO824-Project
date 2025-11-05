@@ -1,6 +1,7 @@
 from typing import List, Tuple
 from scipy.ndimage import distance_transform_edt
 import numpy as np
+from scipy.spatial import KDTree
 
 Node = Tuple[float, float]
 
@@ -34,10 +35,13 @@ class AgcspInstance:
     def _perform_precomputations(self):
         """Run all preprocessing steps."""
         self._compute_bounding_box_and_masks()
-        self._compute_visitable_area()
+        self._compute_visitable_area_dense()
         self._compute_coverable_area()
         self._filter_field_nodes()
         self._update_obstacles_with_removed_nodes()
+        self._apply_adaptive_sampling()
+        self._update_sparse_obstacle_mask()
+        self._compute_visitable_area()
 
     def _compute_bounding_box_and_masks(self):
         """Compute bounding box, validity mask and obstacle mask."""
@@ -63,6 +67,39 @@ class AgcspInstance:
             self._visitable_mask = self.validity_mask & (distances_to_obstacle > R)
         else:
             self._visitable_mask = self.validity_mask.copy()
+
+        visitable_indices = np.argwhere(self._visitable_mask)
+    
+        self.visitable_nodes_array = visitable_indices + self.min_coords
+
+        if self.visitable_nodes_array.size > 0:
+            self.visitable_kdtree = KDTree(self.visitable_nodes_array)
+        else:
+            self.visitable_kdtree = None
+
+    def _compute_visitable_area_dense(self):
+        """Calculates the DENSA _visitable_mask for coverage calculation."""
+        R = self.sprayer_length / 2.0
+        if np.any(self.obstacle_mask):
+            distances_to_obstacle = distance_transform_edt(~self.obstacle_mask)
+            self._visitable_mask = self.validity_mask & (distances_to_obstacle > R)
+        else:
+            self._visitable_mask = self.validity_mask.copy()
+
+    def _update_sparse_obstacle_mask(self):
+        """
+        Updates self.obstacle_mask to reflect only the obstacles
+        that exist in the new sparse grid.
+        """
+        grid_set_sparse = set(map(tuple, self.grid_nodes))
+        obstacle_set_original = set(map(tuple, self.obstacle_nodes))
+        
+        self.obstacle_nodes = np.array(list(grid_set_sparse & obstacle_set_original))
+        
+        self.obstacle_mask = np.zeros(self.bounding_box_shape, dtype=bool)
+        if len(self.obstacle_nodes) > 0:
+            shifted_obstacles = self.obstacle_nodes - self.min_coords
+            self.obstacle_mask[shifted_obstacles[:, 0], shifted_obstacles[:, 1]] = True
 
     def _compute_coverable_area(self):
         """Compute which nodes can be covered by the sprayer from visitable nodes."""
@@ -96,3 +133,41 @@ class AgcspInstance:
 
         shifted_removed = self._removed_nodes - self.min_coords
         self.obstacle_mask[shifted_removed[:, 0], shifted_removed[:, 1]] = True
+
+    def _apply_adaptive_sampling(self):
+        """
+        Filters the self.validity_mask to create a non-uniform grid.
+        Maintains high density near obstacles and low density (sampled)
+        in open areas.
+        """
+
+        original_node_count = np.sum(self.validity_mask)
+        print(f"Grid Adaptativo: Densidade original ({np.sum(self.validity_mask)})")
+
+        R = self.sprayer_length / 2.0
+        
+        if np.any(self.obstacle_mask):
+            distances_to_obstacle = distance_transform_edt(~self.obstacle_mask)
+            high_density_mask = (distances_to_obstacle <= R) & self.validity_mask
+        else:
+            high_density_mask = np.zeros_like(self.validity_mask, dtype=bool)
+        
+        step_size = int(max(2, R / 2.0))
+        
+        shape = self.validity_mask.shape
+        
+        low_density_mask = np.zeros(shape, dtype=bool)
+        
+        low_density_mask[::step_size, ::step_size] = True
+
+        low_density_mask &= ~high_density_mask
+        
+        low_density_mask &= self.validity_mask
+        
+        self.validity_mask = high_density_mask | low_density_mask
+        
+        new_indices = np.argwhere(self.validity_mask)
+        self.grid_nodes = new_indices + self.min_coords
+        self.node_count = len(self.grid_nodes)
+        
+        print(f"Grid Adaptativo: Nova densidade (reduzida) ({self.node_count} nós)")
