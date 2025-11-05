@@ -6,6 +6,7 @@ import random
 from scipy.spatial.distance import cdist
 from typing import List, Literal, Dict, Any, Tuple
 from enum import Enum
+from scipy.spatial import KDTree
 from ...instance import AgcspInstance
 from ...evaluator import AgcspEvaluator
 from ...solution import AgcspSolution 
@@ -282,66 +283,73 @@ class BoustrophedonSegmentedHeuristic(BaseConstructiveHeuristic):
 class FSMCoveragePlannerHeuristic(BaseConstructiveHeuristic):
     """
     Constructs an initial solution using a Coverage Planning approach.
-    1. Generates waypoints using a Boustrophedon sweep.
-    2. Connects the waypoints using an A* search to ensure a valid path.
+    1. Generates waypoints using the SPARSE visitable nodes.
+    2. Connects the waypoints using an A* search on the DENSE visitable map.
     """
 
     def generate_initial_solution(self) -> AgcspSolution:
         """
         Orchestrates solution generation by combining scans and A*.
         """
-        final_path = []
+        instance = self.instance
         
-        for sweep_axis in ['C', 'R']:
-            waypoints = self._generate_boustrophedon_waypoints(sweep_axis=sweep_axis)
-            
-            if not waypoints:
-                continue
-
-            if not final_path:
-                final_path.append(waypoints[0])
-            else:
-                last_point = final_path[-1]
-                first_waypoint = waypoints[0]
-                connection_path = self._a_star_path(last_point, first_waypoint)
-                if connection_path:
-                    final_path.extend(connection_path[1:])
-
-            for i in range(len(waypoints) - 1):
-                start_node = waypoints[i]
-                end_node = waypoints[i+1]
-                
-                path_segment = self._a_star_path(start_node, end_node)
-                
-                if path_segment:
-                    final_path.extend(path_segment[1:])
-
-            coverage = self.evaluator.coverage_proportion(AgcspSolution(final_path))
-            print(f"After axis scanning '{sweep_axis}', current coverage: {coverage:.2%}")
-            if coverage >= 0.98:
-                break
-                
-        if not final_path:
+        if instance.visitable_kdtree_esparso is None or instance.visitable_nodes_array_esparso.size == 0:
+            print("FSM Planner: Nenhum nó esparso visitável encontrado.")
             return AgcspSolution(path=[])
 
-        simplified_path = self._simplify_path(final_path)
+        nodes_to_visit = set(map(tuple, instance.visitable_nodes_array_esparso))
         
+        final_path = []
+        
+        current_node = tuple(instance.visitable_nodes_array_esparso[0])
+        final_path.append(current_node)
+        nodes_to_visit.remove(current_node)
+
+        print(f"FSM Planner (Nearest Neighbor): Iniciando com {len(nodes_to_visit)} nós alvo esparsos.")
+
+        while nodes_to_visit:
+            remaining_nodes_arr = np.array(list(nodes_to_visit))
+            
+            if remaining_nodes_arr.size == 0:
+                break
+                
+            temp_kdtree = KDTree(remaining_nodes_arr)
+            
+            distance, index = temp_kdtree.query(current_node)
+            next_node = tuple(remaining_nodes_arr[index])
+
+            path_segment = self._a_star_path(current_node, next_node)
+            
+            if path_segment and len(path_segment) > 1:
+                final_path.extend(path_segment[1:])
+                current_node = next_node
+                nodes_to_visit.remove(current_node)
+            else:
+                print(f"A* (denso) falhou ao conectar {current_node} a {next_node}. Removendo da lista.")
+                nodes_to_visit.remove(next_node)
+                
+                if not nodes_to_visit:
+                    break
+                
+                new_start_node_tuple = list(nodes_to_visit)[0]
+                
+                path_to_new_start = self._a_star_path(current_node, new_start_node_tuple)
+                
+                if path_to_new_start:
+                    final_path.extend(path_to_new_start[1:])
+                    current_node = new_start_node_tuple
+                    nodes_to_visit.remove(current_node)
+                else:
+                    print(f"A* (denso) falhou ao pular para {new_start_node_tuple}. Teleportando.")
+                    final_path.append(new_start_node_tuple)
+                    current_node = new_start_node_tuple
+                    nodes_to_visit.remove(current_node)
+
+
+        simplified_path = self._simplify_path(final_path)
         print(f"Path simplification reduced points from {len(final_path)} to {len(simplified_path)}.")
         
         return AgcspSolution(path=simplified_path)
-
-    def _is_node_visitable(self, node: tuple) -> bool:
-        """
-        Checks if a node is visitable using the instance's `_visitable_mask`.
-        """
-        shifted_coords = np.array(node, dtype=int) - self.instance.min_coords
-        r_idx, c_idx = shifted_coords[0], shifted_coords[1]
-
-        if (0 <= r_idx < self.instance._visitable_mask.shape[0] and
-            0 <= c_idx < self.instance._visitable_mask.shape[1]):
-            return self.instance._visitable_mask[r_idx, c_idx]
-        
-        return False
 
     def _simplify_path(self, path: list[tuple]) -> list[tuple]:
         """
@@ -361,62 +369,27 @@ class FSMCoveragePlannerHeuristic(BaseConstructiveHeuristic):
             v1 = p_curr - p_prev
             v2 = p_next - p_curr
             
-            if not np.array_equal(v1, v2):
-                simplified_path.append(path[i])
+            norm_v1 = np.linalg.norm(v1)
+            norm_v2 = np.linalg.norm(v2)
+            
+            if norm_v1 > 1e-6 and norm_v2 > 1e-6:
+                v1_u = v1 / norm_v1
+                v2_u = v2 / norm_v2
+                if not np.allclose(v1_u, v2_u):
+                    simplified_path.append(path[i])
+            elif norm_v1 > 1e-6 or norm_v2 > 1e-6:
+                 simplified_path.append(path[i])
         
         simplified_path.append(path[-1])
         
         return simplified_path
 
-    def _generate_boustrophedon_waypoints(self, sweep_axis: str) -> list[tuple]:
-        """Generates a list of maneuver points (start/end of each segment) for scanning."""
-        instance = self.instance
-        
-        visitable_indices = np.argwhere(instance._visitable_mask)
-        if visitable_indices.size == 0:
-            return []
-        visitable_nodes = visitable_indices + instance.min_coords
-
-        waypoints = []
-        sweep_idx = 1 if sweep_axis == 'C' else 0
-        segment_idx = 0 if sweep_axis == 'C' else 1
-        
-        min_coords = np.min(visitable_nodes, axis=0)
-        max_coords = np.max(visitable_nodes, axis=0)
-        
-        step = instance.sprayer_length
-        s = float(min_coords[sweep_idx])
-        direction = 1
-        tolerance = 0.5
-
-        while s <= max_coords[sweep_idx]:
-            mask = (visitable_nodes[:, sweep_idx] >= s - tolerance) & (visitable_nodes[:, sweep_idx] <= s + tolerance)
-            nodes_in_line = visitable_nodes[mask]
-            
-            if len(nodes_in_line) > 0:
-                nodes_in_line = nodes_in_line[np.argsort(nodes_in_line[:, segment_idx])]
-                
-                if direction == 1:
-                    waypoints.append(tuple(nodes_in_line[0]))
-                    if len(nodes_in_line) > 1:
-                        waypoints.append(tuple(nodes_in_line[-1]))
-                else:
-                    waypoints.append(tuple(nodes_in_line[-1]))
-                    if len(nodes_in_line) > 1:
-                        waypoints.append(tuple(nodes_in_line[0]))
-                
-                direction *= -1
-
-            s += step
-            
-        return waypoints
-
     def _a_star_path(self, start_node: tuple, end_node: tuple) -> list[tuple]:
-        """Finds the shortest path from `start_node` to `end_node` using A*."""
+        """Finds the shortest path from `start_node` to `end_node` using A* on the DENSE grid."""
 
         instance = self.instance
     
-        if instance.visitable_kdtree is None:
+        if instance.visitable_kdtree_dense is None:
             return None
             
         search_radius = 1.6
@@ -431,6 +404,11 @@ class FSMCoveragePlannerHeuristic(BaseConstructiveHeuristic):
         g_score = {start_node: 0}
         f_score = {start_node: heuristic(start_node, end_node)}
         open_set_hash = {start_node}
+        
+        if end_node not in g_score:
+            g_score[end_node] = float('inf')
+            f_score[end_node] = float('inf')
+
 
         while open_set:
             current_node = heapq.heappop(open_set)[1]
@@ -444,10 +422,10 @@ class FSMCoveragePlannerHeuristic(BaseConstructiveHeuristic):
                 path.append(start_node)
                 return path[::-1]
 
-            indices = instance.visitable_kdtree.query_ball_point(current_node, r=search_radius)
+            indices = instance.visitable_kdtree_dense.query_ball_point(current_node, r=search_radius)
             
             for neighbor_idx in indices:
-                neighbor = tuple(instance.visitable_nodes_array[neighbor_idx])
+                neighbor = tuple(instance.visitable_nodes_array_dense[neighbor_idx])
                 
                 if neighbor == current_node:
                     continue
@@ -464,5 +442,5 @@ class FSMCoveragePlannerHeuristic(BaseConstructiveHeuristic):
                     if neighbor not in open_set_hash:
                         heapq.heappush(open_set, (f_score[neighbor], neighbor))
                         open_set_hash.add(neighbor)
-                            
+                        
         return None
