@@ -279,7 +279,7 @@ class AgcspTS(Solver):
 
     def _neighborhood_move_first_improving(self, solution: AgcspSolution) -> AgcspSolution:
         # Randomly decide which operator to try first
-        operators = ['insert', 'remove']
+        operators = ['insert', 'remove', 'move']
         random.shuffle(operators)
         
         current_nodes = {tuple(np.array(point)) for point in solution.path}
@@ -312,6 +312,45 @@ class AgcspTS(Solver):
                     delta = self.evaluator.evaluate_removal_delta(solution, index)
                     if delta < 0:
                         return self._apply_move(solution, 'remove', (index,))
+
+            elif operator == 'move':
+                move_indices = list(range(len(solution.path)))
+                random.shuffle(move_indices)
+                
+                directions = ['up', 'down', 'left', 'right']
+                min_distance = self.strategy.move_min_distance
+                
+                for index in move_indices:
+                    old_node_tuple = tuple(solution.path[index])
+                    if self._is_node_tabu(old_node_tuple):
+                        continue
+                    
+                    random.shuffle(directions)
+                    for direction in directions:
+                        
+                        new_node = self.evaluator._find_node_in_direction(
+                            solution.path[index], min_distance, direction
+                        )
+                        
+                        if new_node is None:
+                            continue
+                        
+                        if np.array_equal(new_node, solution.path[index]):
+                            continue
+                        
+                        result = self.evaluator.evaluate_move_delta(
+                            solution, index, min_distance, direction, return_components=True
+                        )
+                        
+                        if result is None or result[0] == float('inf'):
+                            continue
+                            
+                        total_delta = sum(result)
+                        
+                        if total_delta < 0:
+                            if self.debug_options.verbose:
+                                print(f"  >>> MOVE ACEITO (Move Padrão): Index {index} em direção a {direction}. Delta: {total_delta:.4f}")
+                            return self._apply_move(solution, 'move', (index, new_node))
         
         return solution
     
@@ -329,7 +368,7 @@ class AgcspTS(Solver):
         Returns:
             Improved solution or the same solution if no improvement found
         """
-        operators = ['insert', 'remove', 'move']
+        operators = ['insert', 'remove', 'move', 'swap']
         random.shuffle(operators)
         
         current_nodes = {tuple(np.array(point)) for point in solution.path}
@@ -449,6 +488,8 @@ class AgcspTS(Solver):
                         phase, cov_delta, dist_delta, man_delta,
                         best_components, tolerance
                     ):
+                        if self.debug_options.verbose:
+                            print(f"  >>> MOVE ACEITO (Swap): Indices ({idx1}, {idx2}). Delta Total: {cov_delta + dist_delta + man_delta:.4f}")
                         return self._apply_move(solution, 'swap', (idx1, idx2))
         
         return solution
