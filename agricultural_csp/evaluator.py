@@ -694,42 +694,35 @@ class AgcspEvaluator:
         Returns:
             The coordinates of the first valid non-obstacle node found, or None if no valid node exists
         """
-        # Create a set of valid grid nodes (field nodes, not obstacles) for fast lookup
-        valid_nodes_set = set(map(tuple, self.instance.field_nodes))
+        instance = self.instance
+    
+        if instance.visitable_kdtree is None:
+            return None
+
+        start_r, start_c = start_node[0], start_node[1]
         
-        # Determine the direction vector and starting search position
-        # Coordinates are [x, y] where (0,0) is bottom-left
         if direction == 'up':
-            delta_x, delta_y = 0, 1
-            search_start_x = int(start_node[0])
-            search_start_y = int(start_node[1] + min_distance)
+            target_r, target_c = start_r + min_distance, start_c
         elif direction == 'down':
-            delta_x, delta_y = 0, -1
-            search_start_x = int(start_node[0])
-            search_start_y = int(start_node[1] - min_distance)
+            target_r, target_c = start_r - min_distance, start_c
         elif direction == 'left':
-            delta_x, delta_y = -1, 0
-            search_start_x = int(start_node[0] - min_distance)
-            search_start_y = int(start_node[1])
-        elif direction == 'right':  
-            delta_x, delta_y = 1, 0
-            search_start_x = int(start_node[0] + min_distance)
-            search_start_y = int(start_node[1])
-        
-        current_x, current_y = search_start_x, search_start_y
-        max_search_steps = max(self.instance.bounding_box_shape) * 2
-        
-        for step in range(max_search_steps):
-            candidate = (current_x, current_y)
+            target_r, target_c = start_r, start_c - min_distance
+        elif direction == 'right':
+            target_r, target_c = start_r, start_c + min_distance
             
-            if candidate in valid_nodes_set:
-                return np.array(candidate)
-            
-            current_x += delta_x
-            current_y += delta_y
+        target_point = np.array([target_r, target_c])
         
-        # No valid node found within reasonable distance
-        return None
+        distance, index = instance.visitable_kdtree.query(target_point)
+        
+        new_node = instance.visitable_nodes_array[index]
+        
+        if np.array_equal(new_node, start_node) and min_distance > 0.1:
+            return None
+            
+        if distance > 1.0:
+            pass
+
+        return new_node
     #endregion
     
     def is_feasible(self, solution: AgcspSolution) -> bool:
