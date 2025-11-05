@@ -414,13 +414,18 @@ class FSMCoveragePlannerHeuristic(BaseConstructiveHeuristic):
     def _a_star_path(self, start_node: tuple, end_node: tuple) -> list[tuple]:
         """Finds the shortest path from `start_node` to `end_node` using A*."""
 
+        instance = self.instance
+    
+        if instance.visitable_kdtree is None:
+            return None
+            
+        search_radius = 1.6
+        
         def heuristic(a, b):
             return np.linalg.norm(np.array(a) - np.array(b))
 
-        neighbors = [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]
-        
         open_set = []
-        heapq.heappush(open_set, (0, start_node))
+        heapq.heappush(open_set, (0, start_node)) 
         came_from = {}
         
         g_score = {start_node: 0}
@@ -439,20 +444,25 @@ class FSMCoveragePlannerHeuristic(BaseConstructiveHeuristic):
                 path.append(start_node)
                 return path[::-1]
 
-            for move in neighbors:
-                neighbor = (current_node[0] + move[0], current_node[1] + move[1])
+            indices = instance.visitable_kdtree.query_ball_point(current_node, r=search_radius)
+            
+            for neighbor_idx in indices:
+                neighbor = tuple(instance.visitable_nodes_array[neighbor_idx])
                 
-                if not self._is_node_visitable(neighbor):
+                if neighbor == current_node:
                     continue
 
-                tentative_g_score = g_score[current_node] + 1
-
+                cost_to_move = heuristic(current_node, neighbor) 
+                
+                tentative_g_score = g_score[current_node] + cost_to_move
+                
                 if tentative_g_score < g_score.get(neighbor, float('inf')):
                     came_from[neighbor] = current_node
                     g_score[neighbor] = tentative_g_score
                     f_score[neighbor] = tentative_g_score + heuristic(neighbor, end_node)
+                    
                     if neighbor not in open_set_hash:
                         heapq.heappush(open_set, (f_score[neighbor], neighbor))
                         open_set_hash.add(neighbor)
-                        
+                            
         return None
