@@ -284,72 +284,145 @@ class FSMCoveragePlannerHeuristic(BaseConstructiveHeuristic):
     """
     Constructs an initial solution using a Coverage Planning approach.
     1. Generates waypoints using the SPARSE visitable nodes.
-    2. Connects the waypoints using an A* search on the DENSE visitable map.
+    2. Connects the waypoints using an A* search on the SPARSE visitable map.
     """
 
     def generate_initial_solution(self) -> AgcspSolution:
         """
         Orchestrates solution generation by combining scans and A*.
         """
+        self._ensure_kdtree_exists()
+
         instance = self.instance
         
-        if instance.visitable_kdtree_esparso is None or instance.visitable_nodes_array_esparso.size == 0:
-            print("FSM Planner: Nenhum nó esparso visitável encontrado.")
+        if instance.visitable_kdtree is None or instance.visitable_nodes_array.size == 0:
+            print("FSM Planner: Nenhum nó visitável encontrado (KDTree vazia).")
             return AgcspSolution(path=[])
 
-        nodes_to_visit = set(map(tuple, instance.visitable_nodes_array_esparso))
+        kdtree = instance.visitable_kdtree
+        all_visitable_nodes = instance.visitable_nodes_array
+        uncovered_targets = set(map(tuple, all_visitable_nodes))
+        final_path_nodes = []
         
-        final_path = []
-        
-        current_node = tuple(instance.visitable_nodes_array_esparso[0])
-        final_path.append(current_node)
-        nodes_to_visit.remove(current_node)
+        current_node = tuple(all_visitable_nodes[0])
+        final_path_nodes.append(current_node)
+        uncovered_targets.remove(current_node)
+        self._update_coverage(current_node, uncovered_targets, kdtree, all_visitable_nodes)
 
-        print(f"FSM Planner (Nearest Neighbor): Iniciando com {len(nodes_to_visit)} nós alvo esparsos.")
+        anchor_path = [current_node, current_node]
 
-        while nodes_to_visit:
-            remaining_nodes_arr = np.array(list(nodes_to_visit))
+        print(f"Heurística 'Set Cover': Iniciando. {len(uncovered_targets)} alvos restantes.")
+
+        while uncovered_targets:
+
+            min_cost = float('inf')
+            next_node_to_visit = None
             
-            if remaining_nodes_arr.size == 0:
+            for target_node in uncovered_targets:
+                
+                dist = np.linalg.norm(np.array(current_node) - np.array(target_node))
+
+                p_prev = np.array(anchor_path[-2])
+                p_curr = np.array(current_node)
+                p_next = np.array(target_node)
+                
+                angle_penalty = self.evaluator._calculate_angle_penalty_at_node(p_prev, p_curr, p_next)
+                
+                total_cost = dist + angle_penalty * 10
+                
+                if total_cost < min_cost:
+                    min_cost = total_cost
+                    next_node_to_visit = target_node
+
+            if next_node_to_visit is None:
+                print(f"  AVISO CRÍTICO: Não foi possível encontrar o próximo nó. Alvos restantes: {len(uncovered_targets)}.")
                 break
-                
-            temp_kdtree = KDTree(remaining_nodes_arr)
-            
-            distance, index = temp_kdtree.query(current_node)
-            next_node = tuple(remaining_nodes_arr[index])
 
-            path_segment = self._a_star_path(current_node, next_node)
-            
+            path_segment = self._a_star_path(current_node, next_node_to_visit)
+        
             if path_segment and len(path_segment) > 1:
-                final_path.extend(path_segment[1:])
-                current_node = next_node
-                nodes_to_visit.remove(current_node)
+                # SUCESSO: Atualiza o caminho principal e a âncora
+                final_path_nodes.extend(path_segment[1:])
+                current_node = next_node_to_visit
+                
+                # CRÍTICO: Atualiza a âncora do caminho (para o cálculo do próximo ângulo)
+                # A âncora será o penúltimo e o último ponto do caminho real
+                if len(final_path_nodes) >= 2:
+                    anchor_path = [final_path_nodes[-2], final_path_nodes[-1]]
+                
+                # 6. ATUALIZA A COBERTURA (O "pulo do gato")
+                self._update_coverage(current_node, uncovered_targets, kdtree, all_visitable_nodes)
             else:
-                print(f"A* (denso) falhou ao conectar {current_node} a {next_node}. Removendo da lista.")
-                nodes_to_visit.remove(next_node)
+                # Falha do A* (Ilhas desconexas)
+                print(f"A* falhou ao conectar {current_node} a {next_node_to_visit}. Removendo alvo.")
+                uncovered_targets.discard(next_node_to_visit) # Remove o nó que causou o problema
                 
-                if not nodes_to_visit:
-                    break
-                
-                new_start_node_tuple = list(nodes_to_visit)[0]
-                
-                path_to_new_start = self._a_star_path(current_node, new_start_node_tuple)
-                
-                if path_to_new_start:
-                    final_path.extend(path_to_new_start[1:])
-                    current_node = new_start_node_tuple
-                    nodes_to_visit.remove(current_node)
-                else:
-                    print(f"A* (denso) falhou ao pular para {new_start_node_tuple}. Teleportando.")
-                    final_path.append(new_start_node_tuple)
-                    current_node = new_start_node_tuple
-                    nodes_to_visit.remove(current_node)
+                # Se for forçado a reiniciar, pega o nó mais próximo (aleatório) como nova âncora
+                if uncovered_targets:
+                    current_node = list(uncovered_targets)[0]
+                    final_path_nodes.append(current_node)
+                    self._update_coverage(current_node, uncovered_targets, kdtree, all_visitable_nodes)
 
-
-        simplified_path = self._simplify_path(final_path)
-        print(f"Path simplification reduced points from {len(final_path)} to {len(simplified_path)}.")
+        simplified_path = self._simplify_path(final_path_nodes)
+        print(f"Path simplification reduced points from {len(final_path_nodes)} to {len(simplified_path)}.")
         
         return AgcspSolution(path=simplified_path)
+
+    def _ensure_kdtree_exists(self):
+        """
+        Garante que self.instance.visitable_kdtree e self.instance.visitable_nodes_array
+        existam. Se não existirem (AttributeError), eles são criados
+        a partir da máscara visitável atual.
+        """
+        instance = self.instance
+        
+        try:
+            kdtree_exists = instance.visitable_kdtree is not None
+            array_exists = instance.visitable_nodes_array.size > 0
+            if kdtree_exists and array_exists:
+                return
+        except AttributeError:
+            pass
+
+        # 2. Lógica de Criação de Fallback: Usa a máscara visitável existente
+        if not hasattr(instance, '_visitable_mask'):
+             # Se nem a máscara visitável existe, a instância está quebrada.
+             raise AttributeError("AgcspInstance não tem _visitable_mask. Inicialização da Instância falhou.")
+
+        visitable_indices = np.argwhere(instance._visitable_mask)
+        
+        # ATENÇÃO: Sobrescreve os atributos da instância para uso futuro
+        instance.visitable_nodes_array = visitable_indices + instance.min_coords
+
+        if instance.visitable_nodes_array.size > 0:
+            instance.visitable_kdtree = KDTree(instance.visitable_nodes_array)
+        else:
+            instance.visitable_kdtree = None
+        
+        # Opcional: Para manter a coerência
+        if not hasattr(instance, 'visitable_kdtree'):
+             instance.visitable_kdtree = None
+
+    def _update_coverage(self, visit_node: tuple, uncovered_targets_set: set, 
+                         kdtree: KDTree, all_nodes_arr: np.ndarray) -> int:
+        """
+        Find all sparse nodes (in all_nodes_arr) within the coverage
+        radius of 'visit_node' and remove them from 'uncovered_targets_set'.
+        """
+        coverage_radius = self.instance.sprayer_length / 2.0
+        
+        indices = kdtree.query_ball_point(visit_node, r=coverage_radius)
+        
+        nodes_covered_count = 0
+        for idx in indices:
+            node_tuple = tuple(all_nodes_arr[idx])
+            
+            if node_tuple in uncovered_targets_set:
+                uncovered_targets_set.remove(node_tuple)
+                nodes_covered_count += 1
+                
+        print(f"  Visitou {visit_node}, cobriu {nodes_covered_count} novos nós. {len(uncovered_targets_set)} restantes.")
+        return nodes_covered_count
 
     def _simplify_path(self, path: list[tuple]) -> list[tuple]:
         """
@@ -385,14 +458,17 @@ class FSMCoveragePlannerHeuristic(BaseConstructiveHeuristic):
         return simplified_path
 
     def _a_star_path(self, start_node: tuple, end_node: tuple) -> list[tuple]:
-        """Finds the shortest path from `start_node` to `end_node` using A* on the DENSE grid."""
+        """Finds the shortest path from `start_node` to `end_node` using A* on the SPARSE grid."""
 
         instance = self.instance
     
         if instance.visitable_kdtree_dense is None:
             return None
-            
-        search_radius = 1.6
+        
+        R = instance.sprayer_length / 2.0
+        step_size = int(max(2, R / 2.0))
+        max_diag_dist = step_size * np.sqrt(2)
+        search_radius = math.ceil(max_diag_dist) + 1.0
         
         def heuristic(a, b):
             return np.linalg.norm(np.array(a) - np.array(b))
@@ -430,7 +506,10 @@ class FSMCoveragePlannerHeuristic(BaseConstructiveHeuristic):
                 if neighbor == current_node:
                     continue
 
-                cost_to_move = heuristic(current_node, neighbor) 
+                cost_to_move = heuristic(current_node, neighbor)
+
+                if abs(current_node[0] - neighbor[0]) > 0.5 and abs(current_node[1] - neighbor[1]) > 0.5:
+                    cost_to_move *= 3.0
                 
                 tentative_g_score = g_score[current_node] + cost_to_move
                 
