@@ -13,7 +13,6 @@ def display_grid_and_path(inst, evaluator, path, title_suffix=""):
         title_suffix: Additional text to add to the title
     """
     covered_nodes = evaluator.get_covered_nodes_list(path) if len(path) > 0 else []
-
     total_nodes = inst.target_node_count
     covered_count = len(covered_nodes)
     coverage_percentage = (covered_count / total_nodes) * 100 if total_nodes > 0 else 0
@@ -30,8 +29,8 @@ def display_grid_and_path(inst, evaluator, path, title_suffix=""):
     plt.figure(figsize=(10, 8))
 
     # Plot valid nodes
-    plt.scatter(inst.grid_nodes[:, 0], inst.grid_nodes[:, 1], c='#AAAAAA', s=3,
-               label='Uncovered Nodes', alpha=0.7)
+    plt.scatter(inst.field_nodes[:, 0], inst.field_nodes[:, 1], c='#AAAAAA', s=3,
+                label='Uncovered Nodes', alpha=0.7)
 
     if len(covered_nodes) > 0:
         plt.scatter(covered_nodes[:, 0], covered_nodes[:, 1], c='#00AA44', s=4,

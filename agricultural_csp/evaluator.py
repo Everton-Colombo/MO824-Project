@@ -130,7 +130,7 @@ class AgcspEvaluator:
             self.instance.sprayer_length
         )
 
-        final_coverage_mask = rectangular_coverage & self.instance.validity_mask
+        final_coverage_mask = rectangular_coverage & self.instance.target_mask
         return final_coverage_mask
     
     @staticmethod
