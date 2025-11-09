@@ -36,3 +36,6 @@ dist/
 # Arquivos de teste
 .pytest_cache/
 .coverage
+
+results_FSM_first_best/
+results_FSM_v1/

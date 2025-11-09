@@ -63,6 +63,15 @@ class AgcspTS(Solver):
         if debug_options.log_history:
             self.history: List[tuple] = []
 
+        self.sampling_limits = {
+            'insert_nodes': 100,
+            'insert_pos': 50,
+            'remove_nodes': 100,
+            'swap_pairs': 2000,
+            'move_nodes': 100,
+            '2opt_pairs': 2000
+        }
+
     def solve(self, initial_solution: AgcspSolution = None) -> AgcspSolution:
         """Main method to solve the problem using Tabu Search."""
         self._reset_execution_state()
@@ -159,11 +168,29 @@ class AgcspTS(Solver):
             print(f"Iteration {self._iters}: Best ObjFun = {best_val}, Current ObjFun = {current_val}")
 
         if self.debug_options.log_history:
-            self.history.append((
-                self._iters, 
-                self.evaluator.objfun(self.best_solution) if self.best_solution else 0,
-                self.evaluator.objfun(self._current_solution) if self._current_solution else 0
-            ))
+            if self.best_solution:
+                best_obj = self.evaluator.objfun(self.best_solution)
+                best_cov, best_dist, best_man = self.evaluator.objfun_components(self.best_solution)
+            else:
+                best_obj, best_cov, best_dist, best_man = 0.0, 0.0, 0.0, 0.0
+
+            if self._current_solution:
+                curr_obj = self.evaluator.objfun(self._current_solution)
+                curr_cov, curr_dist, curr_man = self.evaluator.objfun_components(self._current_solution)
+            else:
+                curr_obj, curr_cov, curr_dist, curr_man = best_obj, best_cov, best_dist, best_man
+
+            self.history.append({
+                'Iteration': self._iters,
+                'Best_Obj': best_obj,
+                'Best_Cov_Pen': best_cov,
+                'Best_Dist': best_dist,
+                'Best_Man_Pen': best_man,
+                'Current_Obj': curr_obj,
+                'Current_Cov_Pen': curr_cov,
+                'Current_Dist': curr_dist,
+                'Current_Man_Pen': curr_man
+            })
 
     def _get_heuristic_builder(self, instance, evaluator, strategy: ConstructiveHeuristicType) -> BaseConstructiveHeuristic:
         """Returns the correct instance of the heuristic based on the strategy."""
@@ -286,6 +313,17 @@ class AgcspTS(Solver):
             self._add_to_tabu_list(tuple(new_path[idx2]))
             new_path[idx1], new_path[idx2] = new_path[idx2].copy(), new_path[idx1].copy()
             return AgcspSolution(new_path)
+        elif move == '2-opt':
+            i, j = move_args
+            self._add_to_tabu_list(tuple(solution.path[i]))
+            self._add_to_tabu_list(tuple(solution.path[j]))
+            
+            new_path = np.concatenate([
+                solution.path[:i+1],
+                solution.path[j:i:-1],
+                solution.path[j+1:]
+            ])
+            return AgcspSolution(new_path)
         else:
             raise ValueError(f"Unknown move type: {move}")
 
@@ -303,20 +341,23 @@ class AgcspTS(Solver):
         
         current_nodes = {tuple(np.array(point)) for point in solution.path}
         
-        operators = ['insert', 'remove', 'move']
+        operators = ['remove', 'move', 'swap', '2-opt', 'insert']
         
         for operator in operators:
             
             if operator == 'insert':
                 candidate_nodes = [tuple(np.array(node)) for node in self.instance.grid_nodes]
                 candidate_nodes = [node for node in candidate_nodes if node not in current_nodes]
+                random.shuffle(candidate_nodes)
                 
-                for node in candidate_nodes:
+                for node in candidate_nodes[:self.sampling_limits['insert_nodes']]:
                     if self._is_node_tabu(node):
                         continue
                     
-                    path_indexes = list(range(len(solution.path) + 1))
-                    for index in path_indexes:
+                    path_indexes = list(range(path_len + 1))
+                    random.shuffle(path_indexes)
+                    
+                    for index in path_indexes[:self.sampling_limits['insert_pos']]:
                         delta = self.evaluator.evaluate_insertion_delta(solution, node, index)
                         
                         if delta < best_delta:
@@ -324,7 +365,10 @@ class AgcspTS(Solver):
                             best_move_info = ('insert', (node, index))
                             
             elif operator == 'remove':
-                for index in range(len(solution.path)):
+                remove_indices = list(range(path_len))
+                random.shuffle(remove_indices)
+                
+                for index in remove_indices[:self.sampling_limits['remove_nodes']]:
                     node_tuple = tuple(solution.path[index])
                     if self._is_node_tabu(node_tuple):
                         continue
@@ -336,31 +380,33 @@ class AgcspTS(Solver):
                         best_move_info = ('remove', (index,))
 
             elif operator == 'swap':
-                path_length = len(solution.path)
-                if path_length < 2: continue
+                if path_len < 2: continue
                 
-                for idx1 in range(path_length):
-                    for idx2 in range(idx1 + 1, path_length):
-                        node1 = tuple(solution.path[idx1])
-                        node2 = tuple(solution.path[idx2])
+                all_pairs = [(i, j) for i in range(path_len) for j in range(i + 1, path_len)]
+                random.shuffle(all_pairs)
+                
+                for idx1, idx2 in all_pairs[:self.sampling_limits['swap_pairs']]:
+                    node1 = tuple(solution.path[idx1])
+                    node2 = tuple(solution.path[idx2])
 
-                        if self._is_node_tabu(node1) or self._is_node_tabu(node2):
-                            continue
-                            
-                        delta = self.evaluator.evaluate_swap_delta(solution, idx1, idx2, return_components=False)
+                    if self._is_node_tabu(node1) or self._is_node_tabu(node2):
+                        continue
                         
-                        if delta == float('inf'): continue # Inviável
-                        
-                        if delta < best_delta:
-                            best_delta = delta
-                            best_move_info = ('swap', (idx1, idx2))
+                    delta = self.evaluator.evaluate_swap_delta(solution, idx1, idx2, return_components=False)
+                    
+                    if delta == float('inf'): continue
+                    
+                    if delta < best_delta:
+                        best_delta = delta
+                        best_move_info = ('swap', (idx1, idx2))
                             
             elif operator == 'move':
-                move_indices = list(range(len(solution.path)))
+                move_indices = list(range(path_len))
+                random.shuffle(move_indices)
                 directions = ['up', 'down', 'left', 'right']
                 min_distance = self.strategy.move_min_distance
                 
-                for index in move_indices:
+                for index in move_indices[:self.sampling_limits['move_nodes']]:
                     old_node_tuple = tuple(solution.path[index])
                     if self._is_node_tabu(old_node_tuple):
                         continue
@@ -384,6 +430,24 @@ class AgcspTS(Solver):
                         if delta < best_delta:
                             best_delta = delta
                             best_move_info = ('move', (index, new_node))
+            
+            elif operator == '2-opt':
+                if path_len < 4: continue
+                
+                all_pairs = [(i, j) for i in range(path_len - 2) for j in range(i + 2, path_len - 1)]
+                random.shuffle(all_pairs)
+                
+                for i, j in all_pairs[:self.sampling_limits['2opt_pairs']]:
+                    if self._is_node_tabu(tuple(solution.path[i])) or self._is_node_tabu(tuple(solution.path[j])):
+                        continue
+                        
+                    delta = self.evaluator.evaluate_2opt_delta(solution, i, j, return_components=False)
+
+                    if delta == float('inf'): continue
+                    
+                    if delta < best_delta:
+                        best_delta = delta
+                        best_move_info = ('2-opt', (i, j))
                             
         if best_move_info is not None:
             operator, move_args = best_move_info
@@ -396,33 +460,34 @@ class AgcspTS(Solver):
             return solution
 
     def _neighborhood_move_first_improving(self, solution: AgcspSolution) -> AgcspSolution:
-        # Randomly decide which operator to try first
-        operators = ['insert', 'remove', 'move']
-        random.shuffle(operators)
+        operators = ['remove', 'move', 'swap', '2-opt', 'insert']
         
         current_nodes = {tuple(np.array(point)) for point in solution.path}
+        path_len = len(solution.path)
         
         for operator in operators:
             if operator == 'insert':
-                # Evaluating insertions
                 candidate_nodes = [tuple(np.array(node)) for node in self.instance.grid_nodes]
                 candidate_nodes = [node for node in candidate_nodes if node not in current_nodes]
                 random.shuffle(candidate_nodes)
                 
-                for node in candidate_nodes:
+                for node in candidate_nodes[:self.sampling_limits['insert_nodes']]:
                     if self._is_node_tabu(node):
                         continue
                     
-                    path_indexes = list(range(len(solution.path) + 1))
+                    path_indexes = list(range(path_len + 1))
                     random.shuffle(path_indexes)
-                    for index in path_indexes:
+                    
+                    for index in path_indexes[:self.sampling_limits['insert_pos']]:
                         delta = self.evaluator.evaluate_insertion_delta(solution, node, index)
                         if delta < 0:
                             return self._apply_move(solution, 'insert', (node, index))
             
             elif operator == 'remove':
-                # Evaluating removals
-                for index in range(len(solution.path)):
+                remove_indices = list(range(path_len))
+                random.shuffle(remove_indices)
+
+                for index in remove_indices[:self.sampling_limits['remove_nodes']]:
                     node_tuple = tuple(solution.path[index])
                     if self._is_node_tabu(node_tuple):
                         continue
@@ -431,14 +496,31 @@ class AgcspTS(Solver):
                     if delta < 0:
                         return self._apply_move(solution, 'remove', (index,))
 
-            elif operator == 'move':
-                move_indices = list(range(len(solution.path)))
-                random.shuffle(move_indices)
+            elif operator == 'swap':
+                if path_len < 2: continue
                 
+                all_pairs = [(i, j) for i in range(path_len) for j in range(i + 1, path_len)]
+                random.shuffle(all_pairs)
+                
+                for idx1, idx2 in all_pairs[:self.sampling_limits['swap_pairs']]:
+                    node1 = tuple(solution.path[idx1])
+                    node2 = tuple(solution.path[idx2])
+
+                    if self._is_node_tabu(node1) or self._is_node_tabu(node2):
+                        continue
+                        
+                    delta = self.evaluator.evaluate_swap_delta(solution, idx1, idx2, return_components=False)
+                    
+                    if delta < 0 and delta != float('inf'):
+                        return self._apply_move(solution, 'swap', (idx1, idx2))
+
+            elif operator == 'move':
+                move_indices = list(range(path_len))
+                random.shuffle(move_indices)
                 directions = ['up', 'down', 'left', 'right']
                 min_distance = self.strategy.move_min_distance
                 
-                for index in move_indices:
+                for index in move_indices[:self.sampling_limits['move_nodes']]:
                     old_node_tuple = tuple(solution.path[index])
                     if self._is_node_tabu(old_node_tuple):
                         continue
@@ -450,10 +532,7 @@ class AgcspTS(Solver):
                             solution.path[index], min_distance, direction
                         )
                         
-                        if new_node is None:
-                            continue
-                        
-                        if np.array_equal(new_node, solution.path[index]):
+                        if new_node is None or np.array_equal(new_node, solution.path[index]):
                             continue
                         
                         result = self.evaluator.evaluate_move_delta(
@@ -469,6 +548,21 @@ class AgcspTS(Solver):
                             if self.debug_options.verbose:
                                 print(f"  >>> MOVE ACEITO (Move Padrão): Index {index} em direção a {direction}. Delta: {total_delta:.4f}")
                             return self._apply_move(solution, 'move', (index, new_node))
+            
+            elif operator == '2-opt':
+                if path_len < 4: continue
+                
+                all_pairs = [(i, j) for i in range(path_len - 2) for j in range(i + 2, path_len - 1)]
+                random.shuffle(all_pairs)
+                
+                for i, j in all_pairs[:self.sampling_limits['2opt_pairs']]:
+                    if self._is_node_tabu(tuple(solution.path[i])) or self._is_node_tabu(tuple(solution.path[j])):
+                        continue
+                        
+                    delta = self.evaluator.evaluate_2opt_delta(solution, i, j, return_components=False)
+                    
+                    if delta < 0 and delta != float('inf'):
+                        return self._apply_move(solution, '2-opt', (i, j))
         
         return solution
     
@@ -486,11 +580,11 @@ class AgcspTS(Solver):
         Returns:
             Improved solution or the same solution if no improvement found
         """
-        operators = ['insert', 'remove', 'move', 'swap']
-        random.shuffle(operators)
+        operators = ['remove', 'move', 'swap', '2-opt', 'insert']
         
         current_nodes = {tuple(np.array(point)) for point in solution.path}
         tolerance = self.strategy.phased_optimization.degradation_tolerances[phase]
+        path_len = len(solution.path)
         
         for operator in operators:
             if operator == 'insert':
@@ -498,13 +592,14 @@ class AgcspTS(Solver):
                 candidate_nodes = [node for node in candidate_nodes if node not in current_nodes]
                 random.shuffle(candidate_nodes)
                 
-                for node in candidate_nodes:
+                for node in candidate_nodes[:self.sampling_limits['insert_nodes']]:
                     if self._is_node_tabu(node):
                         continue
                     
-                    path_indexes = list(range(len(solution.path) + 1))
+                    path_indexes = list(range(path_len + 1))
                     random.shuffle(path_indexes)
-                    for index in path_indexes:
+                    
+                    for index in path_indexes[:self.sampling_limits['insert_pos']]:
                         result = self.evaluator.evaluate_insertion_delta(
                             solution, node, index, return_components=True
                         )
@@ -521,10 +616,10 @@ class AgcspTS(Solver):
                             return self._apply_move(solution, 'insert', (node, index))
             
             elif operator == 'remove':
-                remove_indices = list(range(len(solution.path)))
+                remove_indices = list(range(path_len))
                 random.shuffle(remove_indices)
                 
-                for index in remove_indices:
+                for index in remove_indices[:self.sampling_limits['remove_nodes']]:
                     node_tuple = tuple(solution.path[index])
                     if self._is_node_tabu(node_tuple):
                         continue
@@ -545,12 +640,11 @@ class AgcspTS(Solver):
                         return self._apply_move(solution, 'remove', (index,))
             
             elif operator == 'move':
-                move_indices = list(range(len(solution.path)))
+                move_indices = list(range(path_len))
                 random.shuffle(move_indices)
-                
                 directions = ['up', 'down', 'left', 'right']
                 
-                for index in move_indices:
+                for index in move_indices[:self.sampling_limits['move_nodes']]:
                     node_tuple = tuple(solution.path[index])
                     if self._is_node_tabu(node_tuple):
                         continue
@@ -576,17 +670,13 @@ class AgcspTS(Solver):
                             return self._apply_move(solution, 'move', (index, new_node))
 
             elif operator == 'swap':
-                path_length = len(solution.path)
-                if path_length < 2:
+                if path_len < 2:
                     continue
                 
-                all_pairs = [(i, j) for i in range(path_length) for j in range(i + 1, path_length)]
+                all_pairs = [(i, j) for i in range(path_len) for j in range(i + 1, path_len)]
                 random.shuffle(all_pairs)
 
-                max_samples = 2000
-                all_pairs = all_pairs[:max_samples] 
-                
-                for idx1, idx2 in all_pairs:
+                for idx1, idx2 in all_pairs[:self.sampling_limits['swap_pairs']]:
                     node1 = tuple(solution.path[idx1])
                     node2 = tuple(solution.path[idx2])
 
@@ -609,6 +699,32 @@ class AgcspTS(Solver):
                         if self.debug_options.verbose:
                             print(f"  >>> MOVE ACEITO (Swap): Indices ({idx1}, {idx2}). Delta Total: {cov_delta + dist_delta + man_delta:.4f}")
                         return self._apply_move(solution, 'swap', (idx1, idx2))
+            
+            elif operator == '2-opt':
+                if path_len < 4: continue
+                
+                all_pairs = [(i, j) for i in range(path_len - 2) for j in range(i + 2, path_len - 1)]
+                random.shuffle(all_pairs)
+                
+                for i, j in all_pairs[:self.sampling_limits['2opt_pairs']]:
+                    if self._is_node_tabu(tuple(solution.path[i])) or self._is_node_tabu(tuple(solution.path[j])):
+                        continue
+                        
+                    result = self.evaluator.evaluate_2opt_delta(
+                        solution, i, j, return_components=True
+                    )
+                    
+                    if result[0] == float('inf'): continue
+                    
+                    cov_delta, dist_delta, man_delta = result
+                    
+                    if self._is_move_acceptable_for_phase(
+                        phase, cov_delta, dist_delta, man_delta,
+                        best_components, tolerance
+                    ):
+                        if self.debug_options.verbose:
+                            print(f"  >>> MOVE ACEITO (2-Opt): Indices ({i}, {j}). Delta Dist: {dist_delta:.4f}")
+                        return self._apply_move(solution, '2-opt', (i, j))
         
         return None
 
@@ -621,22 +737,29 @@ class AgcspTS(Solver):
         
         current_nodes = {tuple(np.array(point)) for point in solution.path}
         tolerance = self.strategy.phased_optimization.degradation_tolerances[phase]
+        cov_delta = 0
+        dist_delta = 0
+        man_delta = 0
+        path_len = len(solution.path)
         
         focus_component_idx = phase
-        
-        operators = ['insert', 'remove', 'move', 'swap']
+
+        operators = ['remove', 'move', 'swap', '2-opt', 'insert']
         
         for operator in operators:
 
             if operator == 'insert':
                 candidate_nodes = [tuple(np.array(node)) for node in self.instance.grid_nodes]
                 candidate_nodes = [node for node in candidate_nodes if node not in current_nodes]
+                random.shuffle(candidate_nodes)
                 
-                for node in candidate_nodes:
+                for node in candidate_nodes[:self.sampling_limits['insert_nodes']]:
                     if self._is_node_tabu(node): continue
                     
-                    path_indexes = list(range(len(solution.path) + 1))
-                    for index in path_indexes:
+                    path_indexes = list(range(path_len + 1))
+                    random.shuffle(path_indexes)
+                    
+                    for index in path_indexes[:self.sampling_limits['insert_pos']]:
                         result = self.evaluator.evaluate_insertion_delta(solution, node, index, return_components=True)
                         if result[0] == float('inf'): continue
                         
@@ -655,7 +778,10 @@ class AgcspTS(Solver):
                                 best_move_info = ('insert', (node, index))
                                 
             elif operator == 'remove':
-                for index in range(len(solution.path)):
+                remove_indices = list(range(path_len))
+                random.shuffle(remove_indices)
+                
+                for index in remove_indices[:self.sampling_limits['remove_nodes']]:
                     node_tuple = tuple(solution.path[index])
                     if self._is_node_tabu(node_tuple): continue
                     
@@ -677,12 +803,12 @@ class AgcspTS(Solver):
                             best_move_info = ('remove', (index,))
                             
             elif operator == 'move':
-                
-                move_indices = list(range(len(solution.path)))
+                move_indices = list(range(path_len))
+                random.shuffle(move_indices)
                 directions = ['up', 'down', 'left', 'right']
                 min_distance = self.strategy.move_min_distance
                 
-                for index in move_indices:
+                for index in move_indices[:self.sampling_limits['move_nodes']]:
                     old_node_tuple = tuple(solution.path[index])
                     if self._is_node_tabu(old_node_tuple): continue
                     
@@ -711,15 +837,12 @@ class AgcspTS(Solver):
                                 best_move_info = ('move', (index, new_node))
 
             elif operator == 'swap':
-                path_length = len(solution.path)
-                if path_length < 2: continue
+                if path_len < 2: continue
                 
-                all_pairs = [(i, j) for i in range(path_length) for j in range(i + 1, path_length)]
+                all_pairs = [(i, j) for i in range(path_len) for j in range(i + 1, path_len)]
                 random.shuffle(all_pairs)
-                max_samples = 2000 
-                all_pairs = all_pairs[:max_samples] 
                 
-                for idx1, idx2 in all_pairs:
+                for idx1, idx2 in all_pairs[:self.sampling_limits['swap_pairs']]:
                     node1 = tuple(solution.path[idx1])
                     node2 = tuple(solution.path[idx2])
 
@@ -741,6 +864,50 @@ class AgcspTS(Solver):
                         elif focus_delta == best_focus_delta and sum(deltas) < best_total_delta:
                             best_total_delta = sum(deltas)
                             best_move_info = ('swap', (idx1, idx2))
+            
+            elif operator == '2-opt':
+                if path_len < 4: continue
+                
+                all_pairs = [(i, j) for i in range(path_len - 2) for j in range(i + 2, path_len - 1)]
+                random.shuffle(all_pairs)
+
+                for i, j in all_pairs[:self.sampling_limits['2opt_pairs']]:
+                    if self._is_node_tabu(tuple(solution.path[i])) or self._is_node_tabu(tuple(solution.path[j])):
+                        continue
+
+                    result = self.evaluator.evaluate_2opt_delta(
+                        solution, i, j, return_components=True
+                    )
+                    
+                    if result[0] == float('inf'): continue
+
+                    cov_delta, dist_delta, man_delta = result
+                    deltas = [cov_delta, dist_delta, man_delta]
+
+                    if self._is_move_acceptable_for_phase(phase, cov_delta, dist_delta, man_delta, best_components, tolerance):
+                        focus_delta = deltas[focus_component_idx]
+                        
+                        if focus_delta < best_focus_delta:
+                            best_focus_delta = focus_delta
+                            best_total_delta = sum(deltas)
+                            best_move_info = ('2-opt', (i, j))
+                        elif focus_delta == best_focus_delta and sum(deltas) < best_total_delta:
+                            best_total_delta = sum(deltas)
+                            best_move_info = ('2-opt', (i, j))
+
+            if self._is_move_acceptable_for_phase(phase, cov_delta, dist_delta, man_delta, best_components, tolerance):
+                deltas = [cov_delta, dist_delta, man_delta]
+                focus_delta = deltas[focus_component_idx]
+                current_total_delta = sum(deltas)
+
+                if focus_delta < best_focus_delta:
+                    best_focus_delta = focus_delta
+                    best_total_delta = current_total_delta
+                    best_move_info = (operator, move_args)
+                    
+                elif focus_delta == best_focus_delta and current_total_delta < best_total_delta:
+                    best_total_delta = current_total_delta
+                    best_move_info = (operator, move_args)
 
         if best_move_info is not None:
             operator, move_args = best_move_info

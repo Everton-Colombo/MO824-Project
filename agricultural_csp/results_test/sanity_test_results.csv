@@ -1,3 +1,0 @@
-Instance,Status,Stop Reason,Total Iters,Exec Time (s),Size,Obstacles,Border,Sprayer,Initial Obj,Final Obj,Improvement (%),Final Coverage (%),Final Dist,Final Maneuver,Plot
-inst_02_small_none_no_border_spray20,Success,max_time_secs,4,75.56116580963135,small,none,No,20,396.0,366.9917639699297,7.3253121288056295,100.0,340.1145254786351,26.87723849129463,agricultural_csp/results_test\inst_02_small_none_no_border_spray20_final.jpg
-inst_01_small_none_no_border_spray12,Success,max_time_secs,2,96.90446162223816,small,none,No,12,656.0,649.0,1.0670731707317074,100.0,525.0,124.0,agricultural_csp/results_test\inst_01_small_none_no_border_spray12_final.jpg
