@@ -88,6 +88,8 @@ class AgcspTS(Solver):
         print("-----------------------------------------------------------")
         print(f"Initial solution objective value: {self.evaluator.objfun(self.best_solution):.2f}")
         print("-----------------------------------------------------------")
+
+
         
         if self.strategy.phased_optimization is not None:
             self._solve_phased()
@@ -338,6 +340,7 @@ class AgcspTS(Solver):
     def _neighborhood_move_best_improving(self, solution: AgcspSolution) -> AgcspSolution:
         best_delta = 0.0
         best_move_info = None
+        path_len = len(solution.path)
         
         current_nodes = {tuple(np.array(point)) for point in solution.path}
         
@@ -489,11 +492,16 @@ class AgcspTS(Solver):
 
                 for index in remove_indices[:self.sampling_limits['remove_nodes']]:
                     node_tuple = tuple(solution.path[index])
-                    if self._is_node_tabu(node_tuple):
-                        continue
+                    if self._is_node_tabu(node_tuple): continue
                     
-                    delta = self.evaluator.evaluate_removal_delta(solution, index)
-                    if delta < 0:
+                    result = self.evaluator.evaluate_removal_delta(solution, index, return_components=True)
+                    
+                    if result[0] == float('inf'): continue
+                    
+                    cov_delta, dist_delta, man_delta = result
+                    total_delta = sum(result)
+                    
+                    if cov_delta <= 1e-6 and total_delta < 0:
                         return self._apply_move(solution, 'remove', (index,))
 
             elif operator == 'swap':
