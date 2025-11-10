@@ -10,7 +10,8 @@ class AgcspEvaluator:
     
     def __init__(self, instance: AgcspInstance):
         self.instance = instance
-        self.alpha = 3.0 # Weight for coverage proportion
+        N = self.instance.target_node_count
+        self.alpha = N * 1.5 # Weight for coverage proportion
         self.beta = 2.0   # Weight for travelled distance
         self.gamma = 1.0  # Weight for maneuver complexity penalty
     
