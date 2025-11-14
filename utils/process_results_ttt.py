@@ -3,7 +3,7 @@ import csv
 
 def processar_resultados(caminho_entrada, caminho_saida, log_bad_lines=None):
     """
-    Formata o CSV de resultados, selecionando apenas as colunas relevantes,
+    Formata o CSV de resultados do CSP, selecionando apenas as colunas relevantes,
     renomeando, convertendo valores numéricos e arredondando.
     """
     # Lê o CSV, pulando linhas ruins
@@ -13,27 +13,39 @@ def processar_resultados(caminho_entrada, caminho_saida, log_bad_lines=None):
             bad_lines.append(line)
             return None
         df = pd.read_csv(caminho_entrada, engine='python', on_bad_lines=bad_line_handler)
-
     else:
         df = pd.read_csv(caminho_entrada, engine='python', on_bad_lines='skip')
 
-    # Seleciona e renomeia as colunas que realmente usamos
+    # Seleciona e renomeia as colunas relevantes
     df = df[[
-        "Run Name", "Solver", "Strategy", "Exec Time (s)", 
-        "Initial Obj", "Final Obj", "Improvement (%)", "Final Coverage (%)"
+        "Run Name", "Strategy", "Status", "Stop Reason", "Total Iters", "Exec Time (s)",
+        "Size", "Obstacles", "Border", "Sprayer",
+        "Initial Obj", "Final Obj", "Improvement (%)", "Final Coverage (%)",
+        "Final Dist", "Final Maneuver"
     ]].rename(columns={
         "Run Name": "ID",
-        "Solver": "Solver",
         "Strategy": "Estratégia",
+        "Status": "Status",
+        "Stop Reason": "Parada",
+        "Total Iters": "Iterações",
         "Exec Time (s)": "Tempo (s)",
+        "Size": "Tamanho",
+        "Obstacles": "Obstáculos",
+        "Border": "Borda",
+        "Sprayer": "Pulverizador",
         "Initial Obj": "Obj Inicial",
         "Final Obj": "Obj Final",
         "Improvement (%)": "Melhoria (%)",
-        "Final Coverage (%)": "Cobertura Final (%)"
+        "Final Coverage (%)": "Cobertura Final (%)",
+        "Final Dist": "Distância Final",
+        "Final Maneuver": "Manobra Final"
     })
 
     # Converte colunas numéricas
-    colunas_numericas = ["Tempo (s)", "Obj Inicial", "Obj Final", "Melhoria (%)", "Cobertura Final (%)"]
+    colunas_numericas = [
+        "Iterações", "Tempo (s)", "Obj Inicial", "Obj Final",
+        "Melhoria (%)", "Cobertura Final (%)", "Distância Final", "Manobra Final"
+    ]
     for col in colunas_numericas:
         df[col] = pd.to_numeric(df[col], errors='coerce').round(2)
 
@@ -57,7 +69,7 @@ def processar_resultados(caminho_entrada, caminho_saida, log_bad_lines=None):
 
 if __name__ == "__main__":
     processar_resultados(
-        "batch_run_results.csv", 
+        "batch_run_results.csv",
         "batch_run_results_formatados.csv",
         log_bad_lines="linhas_puladas.log"
     )

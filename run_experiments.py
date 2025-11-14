@@ -237,7 +237,7 @@ def main():
     RESULTS_DIR = 'agricultural_csp/results'
     os.makedirs(RESULTS_DIR, exist_ok=True)
     
-    TERMINATION_CRITERIA = TerminationCriteria(max_time_secs=1800)
+    TERMINATION_CRITERIA = TerminationCriteria(max_time_secs=900)
     
     DEBUG_OPTIONS = DebugOptions(verbose=False, log_history=True)
     
@@ -247,10 +247,10 @@ def main():
         'large': 40
     }
 
-    SEARCH_STRATEGIES_TO_TEST = ['first', 'best']
+    SEARCH_STRATEGIES_TO_TEST = ['first']
     
     STRATEGY_TEMPLATE = {
-        'constructive_heuristic': ConstructiveHeuristicType.FSM_COVERAGE_PLANNER,
+        'constructive_heuristic': ConstructiveHeuristicType.RANDOM,
         'phased_optimization': {
             'iterations': [20, 50, 10],
             'tolerances': [0.0, 0.005, 0.005]

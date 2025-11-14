@@ -88,8 +88,6 @@ class AgcspTS(Solver):
         print("-----------------------------------------------------------")
         print(f"Initial solution objective value: {self.evaluator.objfun(self.best_solution):.2f}")
         print("-----------------------------------------------------------")
-
-
         
         if self.strategy.phased_optimization is not None:
             self._solve_phased()
